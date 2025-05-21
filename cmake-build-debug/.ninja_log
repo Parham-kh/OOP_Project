@@ -1,0 +1,16 @@
+# ninja log v6
+4	821	7695429327105741	build.ninja	13a8b73220b5f431
+4	4545	7695413130849992	CMakeFiles/OOP_Project.dir/main.cpp.obj	9642e4a14e6ae4c2
+4546	5710	7695413176268918	OOP_Project.exe	f3fd9d0e3bbacc10
+128	1165	7695511574126709	CMakeFiles/OOP_Project.dir/Exceptions/Exceptions.cpp.obj	274c4137fa9110e9
+153	1920	7695511574373395	CMakeFiles/OOP_Project.dir/Model/Node.cpp.obj	136da23178bf5bdb
+384	2047	7695511576688451	CMakeFiles/OOP_Project.dir/Model/Resistor.cpp.obj	2c269b38457d1df9
+182	2145	7695511574672600	CMakeFiles/OOP_Project.dir/Model/Element.cpp.obj	8fa0574e656510d4
+470	2253	7695511577554887	CMakeFiles/OOP_Project.dir/ProgramController/Circuit.cpp.obj	48930ce39241c63c
+1921	2825	7695511592056091	CMakeFiles/OOP_Project.dir/Model/VoltageSource.cpp.obj	ff41f0cb53f5fcc7
+2048	2967	7695511593332676	CMakeFiles/OOP_Project.dir/Model/Inductor.cpp.obj	b41325e09715b08a
+2146	3012	7695511594310359	CMakeFiles/OOP_Project.dir/Model/Capacitor.cpp.obj	8d7b1c42c292b268
+2254	3059	7695511595387184	CMakeFiles/OOP_Project.dir/Model/CurrentSource.cpp.obj	ed38d19374967696
+21	3889	7695511573056925	CMakeFiles/OOP_Project.dir/main.cpp.obj	9642e4a14e6ae4c2
+1167	7489	7695511584526249	CMakeFiles/OOP_Project.dir/View/View.cpp.obj	73e5e2cd72339b32
+7489	10480	7695511647736064	OOP_Project.exe	c70c861c5a142b3a

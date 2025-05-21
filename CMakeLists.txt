@@ -7,4 +7,14 @@ include_directories(.)
 
 add_executable(OOP_Project
     main.cpp
+        Exceptions/Exceptions.cpp
+        Model/Node.cpp
+        Model/Element.cpp
+        Model/Resistor.cpp
+        ProgramController/Circuit.cpp
+        View/View.cpp
+        Model/VoltageSource.cpp
+        Model/Inductor.cpp
+        Model/Capacitor.cpp
+        Model/CurrentSource.cpp
 )

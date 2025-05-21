@@ -1,39 +1,17 @@
 #include <bits/stdc++.h>
+#include <Exceptions/Exceptions.h>
+#include <Model/Node.h>
+#include <Model/Element.h>
+#include <Model/VoltageSource.h>
+#include <Model/Resistor.h>
+#include <Model/Capacitor.h>
+#include <Model/Inductor.h>
+#include <Model/CurrentSource.h>
+#include <ProgramController/Circuit.h>
+#include <View/View.h>
 using namespace std;
-namespace Model {
-    class Node{};
-    class Element {
-        string type;
-    };
-    class VoltageSource:public Element {
-    };
-    class Resistor:public Element {
-
-    };
-    class Inductor:public Element{};
-    class Capacitor:public Element{};
-    class CurrentSource:public Element{};
-};
 using namespace Model;
-namespace Controller {
-    class Circuit {
-        vector<Element*> elements;
-        vector<Node*> nodes;
-
-    public:
-    };
-}
 using namespace Controller;
-namespace View {
-    class view {
-        public:
-        void run() {
-            string input;
-            getline(cin, input);
-            regex r1("");
-        }
-    };
-}
 using namespace View;
 
 
