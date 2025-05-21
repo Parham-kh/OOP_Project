@@ -26,3 +26,6 @@
 3	1885	7695744148545956	CMakeFiles/OOP_Project.dir/main.cpp.obj	9642e4a14e6ae4c2
 655	4207	7695744155058518	CMakeFiles/OOP_Project.dir/View/View.cpp.obj	73e5e2cd72339b32
 4207	5471	7695744190578256	OOP_Project.exe	c70c861c5a142b3a
+5	677	7695745464127651	CMakeFiles/OOP_Project.dir/ProgramController/Circuit.cpp.obj	48930ce39241c63c
+51	3478	7695745464586443	CMakeFiles/OOP_Project.dir/View/View.cpp.obj	73e5e2cd72339b32
+3478	4605	7695745498862769	OOP_Project.exe	c70c861c5a142b3a
