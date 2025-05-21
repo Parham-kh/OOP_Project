@@ -11,6 +11,7 @@ void Circuit::addResistor(string name, string n1,string n2, double resistance) {
         Node* node2=new Node(n2,0);
         Resistor* resistor=new Resistor(name,node1,node2,resistance);
         elements.push_back(resistor);
+        //
     }catch(const exception& e) {
         cout<<e.what()<<endl;
     }
