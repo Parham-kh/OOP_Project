@@ -29,6 +29,9 @@ namespace Model {
         bool isGND() {
             return this->IS_GND;
         }
+        void setName(string name) {
+            this->name = name;
+        }
     };
 
     class Element {
@@ -352,6 +355,121 @@ namespace Controller {
                 cout<<"Node does not exist"<<endl;
             }
         }
+
+        void showNodes() {
+            cout<<"Available nodes:"<<endl;
+            for(int i=0; i < nodes.size()-1; i++) {
+                cout<<nodes[i]->getName()<<", ";
+            }
+            cout<<nodes[nodes.size()-1]->getName()<<endl;
+        }
+
+        void show(string type) {
+            cout<<"Available "<<type+"s"<<endl;
+            int t=0;
+            for(int i=0; i < elements.size(); i++) {
+                if(elements[i]->getType()==type) {
+                    t++;
+                    if(t==1)
+                        cout<<elements[i]->getName();
+                    else
+                    cout<<", "<<elements[i]->getName();
+                }
+            }
+        }
+
+        void showall() {
+            cout<<"Available Resistors:"<<endl;
+            int t=0;
+            for(int i=0; i < elements.size(); i++) {
+                if(elements[i]->getType()=="Resistor") {
+                    t++;
+                    if(t==1)
+                        cout<<elements[i]->getName();
+                    else
+                        cout<<", "<<elements[i]->getName();
+                }
+            }
+            cout<<"Available Capacitors:"<<endl;
+            t=0;
+            for(int i=0; i < elements.size(); i++) {
+                if(elements[i]->getType()=="Capacitors") {
+                    t++;
+                    if(t==1)
+                        cout<<elements[i]->getName();
+                    else
+                        cout<<", "<<elements[i]->getName();
+                }
+            }
+            cout<<"Available Inductors:"<<endl;
+            t=0;
+            for(int i=0; i < elements.size(); i++) {
+                if(elements[i]->getType()=="Inductor") {
+                    t++;
+                    if(t==1)
+                        cout<<elements[i]->getName();
+                    else
+                        cout<<", "<<elements[i]->getName();
+                }
+            }
+            cout<<"Available Diodes:"<<endl;
+            t=0;
+            for(int i=0; i < elements.size(); i++) {
+                if(elements[i]->getType()=="Diode") {
+                    t++;
+                    if(t==1)
+                        cout<<elements[i]->getName();
+                    else
+                        cout<<", "<<elements[i]->getName();
+                }
+            }
+            // cout<<"Available Resistors:"<<endl;
+            // int t=0;
+            // for(int i=0; i < elements.size(); i++) {
+            //     if(elements[i]->getType()=="Resistor") {
+            //         t++;
+            //         if(t==1)
+            //             cout<<elements[i]->getName();
+            //         else
+            //             cout<<", "<<elements[i]->getName();
+            //     }
+            // }
+            // cout<<"Available Resistors:"<<endl;
+            // int t=0;
+            // for(int i=0; i < elements.size(); i++) {
+            //     if(elements[i]->getType()=="Resistor") {
+            //         t++;
+            //         if(t==1)
+            //             cout<<elements[i]->getName();
+            //         else
+            //             cout<<", "<<elements[i]->getName();
+            //     }
+            // }
+        }
+
+        void renameNode(string old_name,string new_name) {
+            bool old_found=false,new_found=false;
+            for(auto n:nodes) {
+                if(n->getName()==old_name) {
+                    old_found=true;
+                }
+                if(n->getName()==new_name) {
+                    new_found=true;
+                }
+            }
+            if(old_found==false) {
+                throw Error("ERROR: Node "+old_name+" does not exist in the circuit");
+            }
+            if(new_found==true) {
+                throw Error("ERROR: Node name "+new_name+" already exists");
+            }
+            for(auto n:nodes) {
+                if(n->getName()==old_name) {
+                    n->setName(new_name);
+                    cout<<"SUCCESS: Node renamed from "<<old_name<<" to "<<new_name<<endl;
+                }
+            }
+        }
     };
 }
 
@@ -374,7 +492,10 @@ namespace View {
                     regex del("delete (\\S+)");
                     regex add_GND("add (\\S+) (\\S+)");
                     regex Delete_GND("delete (\\S+) (\\S+)");
-
+                    regex show_nodes(".nodes");
+                    regex show(".list (\\S+)");
+                    regex showall(".list");
+                    regex change_node(".rename node (\\S+) (\\S+)");
                     smatch match;
                     if (regex_search(input, match, add)) {
                         if (match[1].str()[0] == 'R')
@@ -411,6 +532,18 @@ namespace View {
                             circuit->delete_GND(match[2].str());
                         else
                             throw Error("Error: Element "+match[1].str() + " not found in library");
+                    }
+                    else if(regex_search(input, match, show_nodes)) {
+                        circuit->showNodes();
+                    }
+                    else if(regex_search(input,match,show)) {
+                        circuit->show(match[1].str());
+                    }
+                    else if(regex_search(input, match, showall)) {
+                        circuit->showall();
+                    }
+                    else if(regex_search(input,match,change_node)) {
+                        circuit->renameNode(match[1].str(),match[2].str());
                     }
                     else {
                         throw Error("Error: Syntax error");
