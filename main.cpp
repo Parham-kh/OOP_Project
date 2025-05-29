@@ -54,6 +54,14 @@ namespace Model {
     class Inductor:public Element{};
     class Capacitor:public Element{};
     class CurrentSource:public Element{};
+    class Diode:public Element {
+        private:
+        string model="";
+
+        public:
+        Diode(string name, Node* node1, Node* node2, string model)
+        : Element(name, "Diode", node1, node2, 0, 0), model(model) {}
+    };
 };
 using namespace Model;
 namespace Controller {
@@ -115,16 +123,62 @@ namespace Controller {
                 cout<<e.what()<<endl;
             }
         }
+        void addDiode(string name,string n1,string n2,string model) {
+            try {
+                for(auto e:elements) {
+                    if(e->getName()==name) {
+                        throw Error("Error: Diode "+name+" already exists in the circuit");
+                    }
+                }
+                Node* node1;
+                Node* node2;
+                bool nod1=false,nod2=false;
+                for(auto n:nodes) {
+                    if(n->getName()==n1) {
+                        nod1=true;
+                        node1=n;
+                    }
+                    if(n->getName()==n2) {
+                        nod2=true;
+                        node2=n;
+                    }
+                }
+                if(!nod1) {
+                    Node* node1=new Node(n1,0);
+                    nodes.push_back(node1);
+                }
+                if(!nod2) {
+                    Node* node2=new Node(n2,0);
+                    nodes.push_back(node2);
+                }
+                Diode* diode=new Diode(name,node1,node2,model);
+                elements.push_back(diode);
+            }catch(const exception& e) {
+                cout<<e.what()<<endl;
+            }
+        }
         void deleteResistor(string name) {
             bool found=false;
             for(int i=0;i<elements.size();i++) {
-                if(elements[i]->getName()=="R"+name) {
+                if(elements[i]->getName()==name) {
                     elements.erase(elements.begin()+i);
                     found=true;
                 }
             }
             if(!found) {
             throw Error("Error: Cannot delete resistor; component not found");
+            }
+        }
+        void deleteDiode(string name) {
+            bool found=false;
+            for(int i=0;i<elements.size();i++) {
+                if(elements[i]->getName()==name) {
+                    elements.erase(elements.begin()+i);
+                    found=true;
+                }
+            }
+            if(!found) {
+                throw Error("Error: Cannot delete diode; component not found");
             }
         }
     };
@@ -144,13 +198,18 @@ class view {
                 getline(cin, input);
                 regex r1("add (\\S+) (\\S+) (\\S+) (\\S+)");
                 regex r2("delete (\\S+)");
+                regex Add_Diode("add (\\S+) (\\S+) (\\S+) (\\S+)");
+                regex Delete_Diode("delete (\\S+)");
                 smatch match;
                 if (regex_search(input, match, r1)) {
+                    if(match[1][0]=)
                     circuit->addResistor(match[1].str(), match[2].str(), match[3].str(), match[4].str());
                 }
                 else if (regex_search(input, match, r2)) {
                     circuit->deleteResistor(match[1].str());
                 }
+                else if (regex_search(input, match, Add_Diode)) {}
+                else if (regex_search(input, match, Delete_Diode)) {}
                 else {
                     throw Error("Error: Syntax error");
                 }
