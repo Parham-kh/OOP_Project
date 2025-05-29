@@ -92,7 +92,6 @@ namespace Controller {
             try {
                 Node* node1=new Node(n1,0);
                 Node* node2=new Node(n2,0);
-                cout<<node1->getName();
                 nodes.push_back(node1);
                 Resistor* resistor=new Resistor(name,node1,node2,Coefficient_management(resisrance));
                 elements.push_back(resistor);
