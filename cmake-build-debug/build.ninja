@@ -56,76 +56,6 @@ build CMakeFiles/OOP_Project.dir/main.cpp.obj: CXX_COMPILER__OOP_Project_unscann
   OBJECT_DIR = CMakeFiles\OOP_Project.dir
   OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir
 
-build CMakeFiles/OOP_Project.dir/Exceptions/Exceptions.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Exceptions/Exceptions.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Exceptions\Exceptions.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Exceptions
-
-build CMakeFiles/OOP_Project.dir/Model/Node.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/Node.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\Node.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
-build CMakeFiles/OOP_Project.dir/Model/Element.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/Element.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\Element.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
-build CMakeFiles/OOP_Project.dir/Model/Resistor.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/Resistor.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\Resistor.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
-build CMakeFiles/OOP_Project.dir/ProgramController/Circuit.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/ProgramController/Circuit.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\ProgramController\Circuit.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\ProgramController
-
-build CMakeFiles/OOP_Project.dir/View/View.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/View/View.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\View\View.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\View
-
-build CMakeFiles/OOP_Project.dir/Model/VoltageSource.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/VoltageSource.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\VoltageSource.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
-build CMakeFiles/OOP_Project.dir/Model/Inductor.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/Inductor.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\Inductor.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
-build CMakeFiles/OOP_Project.dir/Model/Capacitor.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/Capacitor.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\Capacitor.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
-build CMakeFiles/OOP_Project.dir/Model/CurrentSource.cpp.obj: CXX_COMPILER__OOP_Project_unscanned_Debug C$:/Users/Asus/CLionProjects/OOP_Project/Model/CurrentSource.cpp || cmake_object_order_depends_target_OOP_Project
-  DEP_FILE = CMakeFiles\OOP_Project.dir\Model\CurrentSource.cpp.obj.d
-  FLAGS = -g -std=gnu++14 -fdiagnostics-color=always
-  INCLUDES = -IC:/Users/Asus/CLionProjects/OOP_Project/.
-  OBJECT_DIR = CMakeFiles\OOP_Project.dir
-  OBJECT_FILE_DIR = CMakeFiles\OOP_Project.dir\Model
-
 
 # =============================================================================
 # Link build statements for EXECUTABLE target OOP_Project
@@ -134,7 +64,7 @@ build CMakeFiles/OOP_Project.dir/Model/CurrentSource.cpp.obj: CXX_COMPILER__OOP_
 #############################################
 # Link the executable OOP_Project.exe
 
-build OOP_Project.exe: CXX_EXECUTABLE_LINKER__OOP_Project_Debug CMakeFiles/OOP_Project.dir/main.cpp.obj CMakeFiles/OOP_Project.dir/Exceptions/Exceptions.cpp.obj CMakeFiles/OOP_Project.dir/Model/Node.cpp.obj CMakeFiles/OOP_Project.dir/Model/Element.cpp.obj CMakeFiles/OOP_Project.dir/Model/Resistor.cpp.obj CMakeFiles/OOP_Project.dir/ProgramController/Circuit.cpp.obj CMakeFiles/OOP_Project.dir/View/View.cpp.obj CMakeFiles/OOP_Project.dir/Model/VoltageSource.cpp.obj CMakeFiles/OOP_Project.dir/Model/Inductor.cpp.obj CMakeFiles/OOP_Project.dir/Model/Capacitor.cpp.obj CMakeFiles/OOP_Project.dir/Model/CurrentSource.cpp.obj
+build OOP_Project.exe: CXX_EXECUTABLE_LINKER__OOP_Project_Debug CMakeFiles/OOP_Project.dir/main.cpp.obj
   FLAGS = -g
   LINK_LIBRARIES = -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
   OBJECT_DIR = CMakeFiles\OOP_Project.dir
