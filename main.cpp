@@ -21,6 +21,9 @@ namespace Model {
 
         public:
         Node(string name, double voltage) :name(name),voltage(voltage){}
+        string getName() {
+            return name;
+        }
     };
     class Element {
         private:
@@ -46,6 +49,7 @@ namespace Model {
         public:
         Resistor(string name, Node* node1, Node* node2, double resistance)
         : Element(name, "Resistor", node1, node2, 0, 0), resistance(resistance) {}
+        double getResistance() {return resistance;}
     };
     class Inductor:public Element{};
     class Capacitor:public Element{};
@@ -88,6 +92,8 @@ namespace Controller {
             try {
                 Node* node1=new Node(n1,0);
                 Node* node2=new Node(n2,0);
+                cout<<node1->getName();
+                nodes.push_back(node1);
                 Resistor* resistor=new Resistor(name,node1,node2,Coefficient_management(resisrance));
                 elements.push_back(resistor);
             }catch(const exception& e) {
@@ -103,6 +109,7 @@ class view {
     Circuit* circuit;
 
     public:
+    view(Circuit* c) : circuit(c) {}
     void run() {
         string input;
         getline(cin, input);
@@ -117,7 +124,8 @@ class view {
 using namespace View;
 
 int main() {
-    view Views;
+    Circuit circuits;
+    view Views(&circuits);
     Views.run();
     return 0;
 }
