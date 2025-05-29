@@ -9,6 +9,8 @@
 #include <Model/CurrentSource.h>
 #include <ProgramController/Circuit.h>
 #include <View/View.h>
+#include <vector>
+
 using namespace std;
 using namespace Model;
 using namespace Controller;
