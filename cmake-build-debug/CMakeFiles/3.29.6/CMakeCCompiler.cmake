@@ -1,4 +1,4 @@
-set(CMAKE_C_COMPILER "C:/Users/Asus/MinGW/bin/gcc.exe")
+set(CMAKE_C_COMPILER "C:/MinGW/bin/gcc.exe")
 set(CMAKE_C_COMPILER_ARG1 "")
 set(CMAKE_C_COMPILER_ID "GNU")
 set(CMAKE_C_COMPILER_VERSION "5.1.0")
@@ -21,14 +21,14 @@ set(CMAKE_C_SIMULATE_VERSION "")
 
 
 
-set(CMAKE_AR "C:/Users/Asus/MinGW/bin/ar.exe")
-set(CMAKE_C_COMPILER_AR "C:/Users/Asus/MinGW/bin/gcc-ar.exe")
-set(CMAKE_RANLIB "C:/Users/Asus/MinGW/bin/ranlib.exe")
-set(CMAKE_C_COMPILER_RANLIB "C:/Users/Asus/MinGW/bin/gcc-ranlib.exe")
-set(CMAKE_LINKER "C:/Users/Asus/MinGW/bin/ld.exe")
+set(CMAKE_AR "C:/MinGW/bin/ar.exe")
+set(CMAKE_C_COMPILER_AR "C:/MinGW/bin/gcc-ar.exe")
+set(CMAKE_RANLIB "C:/MinGW/bin/ranlib.exe")
+set(CMAKE_C_COMPILER_RANLIB "C:/MinGW/bin/gcc-ranlib.exe")
+set(CMAKE_LINKER "C:/MinGW/bin/ld.exe")
 set(CMAKE_LINKER_LINK "")
 set(CMAKE_LINKER_LLD "")
-set(CMAKE_C_COMPILER_LINKER "C:/Users/Asus/MinGW/mingw32/bin/ld.exe")
+set(CMAKE_C_COMPILER_LINKER "C:/MinGW/mingw32/bin/ld.exe")
 set(CMAKE_C_COMPILER_LINKER_ID "GNU")
 set(CMAKE_C_COMPILER_LINKER_VERSION 2.24)
 set(CMAKE_C_COMPILER_LINKER_FRONTEND_VARIANT GNU)
@@ -74,7 +74,7 @@ endif()
 
 
 
-set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "C:/Users/Asus/MinGW/lib/gcc/mingw32/5.1.0/include;C:/Users/Asus/MinGW/include;C:/Users/Asus/MinGW/lib/gcc/mingw32/5.1.0/include-fixed")
+set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "C:/MinGW/lib/gcc/mingw32/5.1.0/include;C:/MinGW/include;C:/MinGW/lib/gcc/mingw32/5.1.0/include-fixed")
 set(CMAKE_C_IMPLICIT_LINK_LIBRARIES "mingw32;gcc;moldname;mingwex;pthread;advapi32;shell32;user32;kernel32;mingw32;gcc;moldname;mingwex")
-set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "C:/Users/Asus/MinGW/lib/gcc/mingw32/5.1.0;C:/Users/Asus/MinGW/lib/gcc;C:/Users/Asus/MinGW/mingw32/lib;C:/Users/Asus/MinGW/lib")
+set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "C:/MinGW/lib/gcc/mingw32/5.1.0;C:/MinGW/lib/gcc;C:/MinGW/mingw32/lib;C:/MinGW/lib")
 set(CMAKE_C_IMPLICIT_LINK_FRAMEWORK_DIRECTORIES "")
