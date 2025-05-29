@@ -3,6 +3,7 @@
 #pragma once
 #include <vector>
 #include <string>
+#include <bits/stdc++.h>
 #include "Model/Element.h"
 #include "Model/Node.h"
 #include "Model/Resistor.h"
@@ -15,7 +16,7 @@ namespace Controller {
         vector<Node*> nodes;
 
     public:
-        void addResistor(string name, string n1, string n2, double resistance);
+        void addResistor(string name, string n1, string n2, string resistance);
     };
 }
 

@@ -10,7 +10,11 @@ namespace Model {
         double voltage = 0;
 
     public:
-        Node(string name, double voltage);
+        // Node(string name, double voltage);
+        void setName(string name);
+        void setVoltage(double voltage);
+        string getName();
+        double getVoltage();
     };
 }
 
