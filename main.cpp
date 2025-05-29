@@ -14,7 +14,6 @@ using namespace Model;
 using namespace Controller;
 using namespace View;
 
-
 int main() {
     view Views;
     Views.run();

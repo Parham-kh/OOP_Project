@@ -1,4 +1,5 @@
 #include "Resistor.h"
+#include <bits/stdc++.h>
 
 using namespace Model;
 
