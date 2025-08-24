@@ -2187,6 +2187,47 @@ void UpdateAndDrawDebugInfo(ImDrawList* drawList, const ImVec2& canvas_p0) {
 }
 
 
+void HandleCanvasShortcuts() {
+    // This function only runs if the canvas is hovered and no pop-ups are active
+    if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) || ImGui::IsAnyItemActive()) {
+        return;
+    }
+
+    // --- Action Keys (Highest Priority) ---
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        g_currentTool = NONE;
+        g_isPlacingWire = false;
+        g_previewIsVertical = false;
+        return; // Action handled, do nothing else.
+    }
+
+    // --- Rotation (Second Priority) ---
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
+        if (g_currentTool != NONE && g_currentTool != WIRE) {
+            g_previewIsVertical = !g_previewIsVertical;
+        }
+        return; // Action handled, do nothing else.
+    }
+
+    // --- Tool Selection (Lowest Priority) ---
+    // This part only runs if the keys above weren't pressed.
+    auto request_component_popup = [](ToolType type) {
+        g_pendingTool = type; g_showComponentPopup = true;
+        g_componentNameBuffer[0] = '\0'; g_componentValueBuffer[0] = '\0';
+        g_previewIsVertical = false; g_componentPopupError.clear();
+    };
+
+    if (ImGui::IsKeyPressed(ImGuiKey_R)) { request_component_popup(RESISTOR); }
+    else if (ImGui::IsKeyPressed(ImGuiKey_C)) { request_component_popup(CAPACITOR); }
+    else if (ImGui::IsKeyPressed(ImGuiKey_L)) { request_component_popup(INDUCTOR); }
+    else if (ImGui::IsKeyPressed(ImGuiKey_V)) { request_component_popup(VSOURCE); }
+    else if (ImGui::IsKeyPressed(ImGuiKey_I)) { request_component_popup(CSOURCE); }
+    else if (ImGui::IsKeyPressed(ImGuiKey_D)) { request_component_popup(DIODE); }
+    else if (ImGui::IsKeyPressed(ImGuiKey_G)) { g_currentTool = GROUND; g_previewIsVertical = false; }
+    else if (ImGui::IsKeyPressed(ImGuiKey_W)) { g_currentTool = WIRE; g_isPlacingWire = false; }
+}
+
+
 void RenderCanvas() {
     ImGui::BeginChild("Canvas", ImVec2(0, 0), true, ImGuiWindowFlags_NoMove);
 
@@ -2202,17 +2243,15 @@ void RenderCanvas() {
         }
     }
 
-    if (ImGui::IsWindowHovered()) {
-        // Handle Rotation Key Press for previews
-        if (g_currentTool != NONE && g_currentTool != WIRE && g_currentTool != VOLTMETER && ImGui::IsKeyPressed(ImGuiKey_R)) {
-            g_previewIsVertical = !g_previewIsVertical;
-        }
+    HandleCanvasShortcuts();
 
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) {
         const ImVec2 mouse_pos_in_canvas = ImVec2(ImGui::GetMousePos().x - canvas_p0.x, ImGui::GetMousePos().y - canvas_p0.y);
         const ImVec2 snapped_pos = SnapToGrid(mouse_pos_in_canvas, GRID_STEP);
 
+
         // --- Placement Logic ---
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (g_currentTool != NONE && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter))) {
             if (g_currentTool == VOLTMETER) {
                 buildCircuit();
                 int closest_connector_id = -1;
