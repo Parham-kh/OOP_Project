@@ -44,7 +44,7 @@
 
 // ================ Global Application State ================
 // Enum to represent the currently selected tool
-enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE, VPULSE, IPULSE, VDELTA, IDELTA };
+enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE, VPULSE, IPULSE, VDELTA, IDELTA, VCVS, VCCS };
 ToolType g_currentTool = NONE;
 
 
@@ -84,6 +84,11 @@ struct PlacedElement {
     // DELTA parameters
     double t_pulse = 0.0;
     double area = 1.0;
+
+    // Dependent Source parameters
+    double gain = 1.0;
+    char ctrlNodeP_name[64] = "";
+    char ctrlNodeN_name[64] = "";
 };
 std::vector<PlacedElement> g_placedElements;
 
@@ -187,6 +192,14 @@ bool g_showIDeltaPopup = false;
 char g_ideltaNameBuffer[64] = "Id1";
 char g_ideltaTPulse[64] = "1s";
 char g_ideltaArea[64] = "1";
+
+bool g_showDepSourcePopup = false;
+char g_depNameBuffer[64] = "G1";
+char g_depGainBuffer[64] = "1";
+char g_depCtrlPBuffer[64] = "n1";
+char g_depCtrlNBuffer[64] = "n2";
+
+std::string g_depPopupError;
 
 
 // ================ Simulation Engine and Circuit Logic ================
@@ -301,7 +314,7 @@ public:
 
 class VoltageSource : public Element {
 public:
-    enum class Type { DC, SINE, PULSE, DELTA };
+    enum class Type { DC, SINE, PULSE, DELTA, VCVS };
     Type sourceType = Type::DC;
 
     // SINE parameters
@@ -321,6 +334,11 @@ public:
     // DELTA parameters
     double t_pulse = 0.0;
     double area = 1.0;
+
+    // Dependent source parameters
+    double gain = 1.0;
+    Node* ctrlNodeP = nullptr;
+    Node* ctrlNodeN = nullptr;
 
     // Constructors
     VoltageSource(const std::string &elemName, Node* n1, Node* n2, double val)
@@ -375,7 +393,7 @@ public:
 
 class CurrentSource : public Element {
 public:
-    enum class Type { DC, SINE, PULSE, DELTA };
+    enum class Type { DC, SINE, PULSE, DELTA, VCCS };
     Type sourceType = Type::DC;
 
     // SINE/DC parameters
@@ -396,6 +414,12 @@ public:
     double t_pulse = 0.0;
     double area = 1.0;
 
+    // Dependent source parameters
+    double gain = 1.0;
+    Node* ctrlNodeP = nullptr;
+    Node* ctrlNodeN = nullptr;
+
+
     CurrentSource(const std::string &elemName, Node* a, Node* b, double offset, double amp = 0, double freq = 0)
             : Element(elemName, a, b, offset), dcOffset(offset), amplitude(amp), frequency(freq) {
         if (amp != 0 && freq != 0) sourceType = Type::SINE;
@@ -409,7 +433,7 @@ public:
             case Type::SINE:
                 this->value = dcOffset + amplitude * sin(2 * M_PI * frequency * t);
                 break;
-            case Type::PULSE: { // <<< ADD THIS OPENING BRACE
+            case Type::PULSE: {
                 if (t < t_delay) { this->value = i_initial; return; }
                 double localTime = t - t_delay;
                 double cycleTime = fmod(localTime, t_period);
@@ -704,6 +728,19 @@ public:
                     if (is_c_unknown) b[idx_c] += I;
                 }
 
+                if (auto vccs = dynamic_cast<CurrentSource*>(elem); vccs && vccs->sourceType == CurrentSource::Type::VCCS) {
+                    double g = vccs->gain;
+                    int idx_p = (vccs->getNode1()->getName() != groundName) ? node_idx.at(vccs->getNode1()->getName()) : -1;
+                    int idx_n = (vccs->getNode2()->getName() != groundName) ? node_idx.at(vccs->getNode2()->getName()) : -1;
+                    int idx_cp = (vccs->ctrlNodeP->getName() != groundName) ? node_idx.at(vccs->ctrlNodeP->getName()) : -1;
+                    int idx_cn = (vccs->ctrlNodeN->getName() != groundName) ? node_idx.at(vccs->ctrlNodeN->getName()) : -1;
+
+                    if (idx_p != -1 && idx_cp != -1) A[idx_p][idx_cp] += g;
+                    if (idx_p != -1 && idx_cn != -1) A[idx_p][idx_cn] -= g;
+                    if (idx_n != -1 && idx_cp != -1) A[idx_n][idx_cp] -= g;
+                    if (idx_n != -1 && idx_cn != -1) A[idx_n][idx_cn] += g;
+                }
+
                 if (g != 0) {
                     if (is_a_unknown) A[idx_a][idx_a] += g;
                     if (is_c_unknown) A[idx_c][idx_c] += g;
@@ -714,17 +751,42 @@ public:
                 }
             }
 
-            // --- D. Stamp Voltage Sources and ON Diodes using MNA ---
+            // --- D. Stamp Voltage Sources, ON Diodes, and VCVS using MNA ---
             for (int k = 0; k < m; ++k) {
                 const auto* elem = v_sources_and_on_diodes[k];
-                std::string name_a = elem->getNode1()->getName(); // Positive terminal
+                std::string name_a = elem->getNode1()->getName();
                 std::string name_c = elem->getNode2()->getName();
-                double V = elem->getValue(); // Works for both VSource.value and Diode.vOn
                 int current_idx = n + k;
 
-                if (name_a != groundName) { A[node_idx.at(name_a)][current_idx] += 1.0; A[current_idx][node_idx.at(name_a)] += 1.0; }
-                if (name_c != groundName) { A[node_idx.at(name_c)][current_idx] -= 1.0; A[current_idx][node_idx.at(name_c)] -= 1.0; }
-                b[current_idx] += V;
+                int idx_a = (name_a != groundName) ? node_idx.at(name_a) : -1;
+                int idx_c = (name_c != groundName) ? node_idx.at(name_c) : -1;
+
+                if (auto vcvs = dynamic_cast<const VoltageSource*>(elem); vcvs && vcvs->sourceType == VoltageSource::Type::VCVS) {
+                    // Add current contribution to KCL equations
+                    if (idx_a != -1) A[idx_a][current_idx] += 1.0; // <<< FIX
+                    if (idx_c != -1) A[idx_c][current_idx] -= 1.0; // <<< FIX
+
+                    // Add voltage constraint equation: Va - Vc - gain*Vcp + gain*Vcn = 0
+                    int idx_cp = (vcvs->ctrlNodeP->getName() != groundName) ? node_idx.at(vcvs->ctrlNodeP->getName()) : -1;
+                    int idx_cn = (vcvs->ctrlNodeN->getName() != groundName) ? node_idx.at(vcvs->ctrlNodeN->getName()) : -1;
+
+                    if (idx_a != -1) A[current_idx][idx_a] += 1.0;
+                    if (idx_c != -1) A[current_idx][idx_c] -= 1.0;
+                    if (idx_cp != -1) A[current_idx][idx_cp] -= vcvs->gain;
+                    if (idx_cn != -1) A[current_idx][idx_cn] += vcvs->gain;
+
+                    b[current_idx] = 0.0;
+                } else {
+                    // --- This is the logic for standard V-sources and ON-Diodes ---
+                    double V = elem->getValue();
+                    if (idx_a != -1) A[idx_a][current_idx] += 1.0;
+                    if (idx_c != -1) A[idx_c][current_idx] -= 1.0;
+
+                    if (idx_a != -1) A[current_idx][idx_a] += 1.0;
+                    if (idx_c != -1) A[current_idx][idx_c] -= 1.0;
+
+                    b[current_idx] = V;
+                }
             }
 
             std::vector<double> x = gaussianElimination(A, b);
@@ -1068,11 +1130,21 @@ void buildCircuit() {
                 g_circuit.addElement(vs);
                 break;
             }
-            case IDELTA: {
-                auto cs = new CurrentSource(e.name, n1, n2, 0.0); // DC value is 0
-                cs->sourceType = CurrentSource::Type::DELTA;
-                cs->t_pulse = e.t_pulse;
-                cs->area = e.area;
+            case VCVS: {
+                auto vs = new VoltageSource(e.name, n1, n2, 0.0);
+                vs->sourceType = VoltageSource::Type::VCVS;
+                vs->gain = e.gain;
+                vs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
+                vs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
+                g_circuit.addElement(vs);
+                break;
+            }
+            case VCCS: {
+                auto cs = new CurrentSource(e.name, n1, n2, 0.0);
+                cs->sourceType = CurrentSource::Type::VCCS;
+                cs->gain = e.gain;
+                cs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
+                cs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
                 g_circuit.addElement(cs);
                 break;
             }
@@ -1182,6 +1254,16 @@ void RenderToolbar() {
     if (ImGui::Button("IPULSE")) { g_showIPulsePopup = true; } ImGui::SameLine();
     if (ImGui::Button("VDelta")) { g_showVDeltaPopup = true; } ImGui::SameLine();
     if (ImGui::Button("IDelta")) { g_showIDeltaPopup = true; } ImGui::SameLine();
+    if (ImGui::Button("VCVS")) {
+        g_currentTool = VCVS;
+        g_showDepSourcePopup = true;
+        g_depPopupError.clear();
+    } ImGui::SameLine();
+    if (ImGui::Button("VCCS")) {
+        g_currentTool = VCCS;
+        g_showDepSourcePopup = true;
+        g_depPopupError.clear();
+    } ImGui::SameLine();
     if (ImGui::Button("VM")) { g_currentTool = VOLTMETER; } ImGui::SameLine();
 
     if (ImGui::Button("Wire")) {
@@ -1631,6 +1713,46 @@ void RenderIDeltaPopup() {
 }
 
 
+void RenderDependentSourcePopup() {
+    if (g_showDepSourcePopup) {
+        ImGui::OpenPopup("Dependent Source Properties");
+        g_showDepSourcePopup = false;
+    }
+    if (ImGui::BeginPopupModal("Dependent Source Properties", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Dependent Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_depNameBuffer, 64);
+        ImGui::InputText("Gain", g_depGainBuffer, 64);
+        ImGui::InputText("Controlling Node (+)", g_depCtrlPBuffer, 64);
+        ImGui::InputText("Controlling Node (-)", g_depCtrlNBuffer, 64);
+
+        // --- Display error message if it exists ---
+        if (!g_depPopupError.empty()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", g_depPopupError.c_str());
+        }
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            // --- NEW: Validation Logic ---
+            std::string ctrlP = g_depCtrlPBuffer;
+            std::string ctrlN = g_depCtrlNBuffer;
+
+            if (ctrlP.empty() || ctrlN.empty()) {
+                g_depPopupError = "Error: Control node names cannot be empty.";
+            } else {
+                g_depPopupError.clear();
+                ImGui::CloseCurrentPopup(); // Success, close the popup
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            g_currentTool = NONE;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+
 // ========================================================================================================
 // Helper function to format a number with SI prefixes (k, M, m, u, n)
 std::string formatValueWithSI(double value) {
@@ -1866,6 +1988,45 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImV
             break;
         }
 
+        case VCVS: {
+            ImVec2 p1_d = {pos.x - 15, pos.y}, p2_d = {pos.x, pos.y - 15};
+            ImVec2 p3_d = {pos.x + 15, pos.y}, p4_d = {pos.x, pos.y + 15};
+            if (element.isVertical) {
+                p1_d = {pos.x, pos.y - 15}; p2_d = {pos.x + 15, pos.y};
+                p3_d = {pos.x, pos.y + 15}; p4_d = {pos.x - 15, pos.y};
+            }
+            drawList->AddQuad(p1_d, p2_d, p3_d, p4_d, color, thickness);
+
+            // Add '+' and '-' signs to show polarity
+            if (element.isVertical) {
+                drawList->AddLine({pos.x - 3, pos.y - 7}, {pos.x + 3, pos.y - 7}, color, thickness);
+                drawList->AddLine({pos.x, pos.y - 9}, {pos.x, pos.y - 5}, color, thickness);
+                drawList->AddLine({pos.x - 3, pos.y + 7}, {pos.x + 3, pos.y + 7}, color, thickness);
+            } else {
+                drawList->AddLine({pos.x - 9, pos.y}, {pos.x - 5, pos.y}, color, thickness);
+                drawList->AddLine({pos.x - 7, pos.y - 2}, {pos.x - 7, pos.y + 2}, color, thickness);
+                drawList->AddLine({pos.x + 5, pos.y}, {pos.x + 9, pos.y}, color, thickness);
+            }
+            break;
+        }
+
+        case VCCS: {
+            // Diamond shape
+            ImVec2 p1_d = {pos.x - 15, pos.y}, p2_d = {pos.x, pos.y - 15};
+            ImVec2 p3_d = {pos.x + 15, pos.y}, p4_d = {pos.x, pos.y + 15};
+            if (element.isVertical) {
+                p1_d = {pos.x, pos.y - 15}; p2_d = {pos.x + 15, pos.y};
+                p3_d = {pos.x, pos.y + 15}; p4_d = {pos.x - 15, pos.y};
+            }
+            drawList->AddQuad(p1_d, p2_d, p3_d, p4_d, color, thickness);
+
+            // Arrow for Current source
+            drawList->AddLine({pos.x - 5, pos.y}, {pos.x + 5, pos.y}, color, thickness);
+            drawList->AddLine({pos.x + 5, pos.y}, {pos.x, pos.y - 4}, color, thickness);
+            drawList->AddLine({pos.x + 5, pos.y}, {pos.x, pos.y + 4}, color, thickness);
+            break;
+        }
+
         case GROUND: {
             drawList->AddLine(pos, ImVec2(pos.x, pos.y + 10), color, thickness);
             drawList->AddLine(ImVec2(pos.x - 10, pos.y + 10), ImVec2(pos.x + 10, pos.y + 10), color, thickness);
@@ -1909,6 +2070,8 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImV
             std::string period_str = formatValueWithSI(element.t_period);
             std::string on_str = formatValueWithSI(element.t_on);
             snprintf(display_str, 128, "IPULSE(%s %s %s %s)", offset_str.c_str(), high_str.c_str(), period_str.c_str(), on_str.c_str());
+        } else if (element.type == VCVS || element.type == VCCS) {
+            snprintf(display_str, 128, "(%s %s %.2f)", element.ctrlNodeP_name, element.ctrlNodeN_name, element.gain);
         } else {
             // Regular formatting for all other components
             snprintf(display_str, 128, "%s", formatValueWithSI(element.value).c_str());
@@ -2126,6 +2289,11 @@ void RenderCanvas() {
                     new_elem.name = g_ideltaNameBuffer;
                     new_elem.t_pulse = parseNumber(g_ideltaTPulse);
                     new_elem.area = parseNumber(g_ideltaArea);
+                } else if (g_currentTool == VCVS || g_currentTool == VCCS) {
+                    new_elem.name = g_depNameBuffer;
+                    new_elem.gain = parseNumber(g_depGainBuffer);
+                    strcpy_s(new_elem.ctrlNodeP_name, g_depCtrlPBuffer);
+                    strcpy_s(new_elem.ctrlNodeN_name, g_depCtrlNBuffer);
                 } else { // Regular components (R, C, L, D, I)
                     new_elem.name = g_componentNameBuffer;
                     new_elem.value = parseNumber(g_componentValueBuffer);
@@ -2253,6 +2421,7 @@ int main() {
         RenderIPulsePopup();
         RenderVDeltaPopup();
         RenderIDeltaPopup();
+        RenderDependentSourcePopup();
         RenderRunPopup();
         RenderDCResultsWindow();
         RenderTransientPlotWindow();
