@@ -44,7 +44,7 @@
 
 // ================ Global Application State ================
 // Enum to represent the currently selected tool
-enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE };
+enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE, VPULSE, IPULSE, VDELTA, IDELTA };
 ToolType g_currentTool = NONE;
 
 
@@ -59,13 +59,31 @@ std::vector<PlacedProbe> g_probes;
 // Struct to hold information about a placed graphical element
 struct PlacedElement {
     ToolType type;
-    ImVec2 pos; // Using ImGui's vector type for position (center of the element)
+    ImVec2 pos;
     std::string name;
     double value;
     bool isVertical = false;
+
+    // SINE parameters
     double amp = 0.0;
     double freq = 0.0;
-    double phase = 0.0;
+
+    // PULSE parameters
+    double v_initial = 0.0;
+    double v_on = 0.0;
+
+    double t_delay = 0.0;
+    double t_rise = 0.0;
+    double t_fall = 0.0;
+    double t_on = 0.0;
+    double t_period = 0.0;
+
+    double i_initial = 0.0;
+    double i_on = 0.0;
+
+    // DELTA parameters
+    double t_pulse = 0.0;
+    double area = 1.0;
 };
 std::vector<PlacedElement> g_placedElements;
 
@@ -139,6 +157,37 @@ char g_iacNameBuffer[64] = "I2";
 char g_iacDcOffsetText[64] = "0";
 char g_iacAmpText[64] = "1";
 char g_iacFreqText[64] = "1k";
+
+bool g_showVPulsePopup = false;
+char g_vpulseNameBuffer[64] = "V3";
+char g_vpulseVInitial[64] = "0";
+char g_vpulseVOn[64] = "5";
+char g_vpulseTDelay[64] = "1s";
+char g_vpulseTRise[64] = "10n";
+char g_vpulseTFall[64] = "10n";
+char g_vpulseTOn[64] = "1s";
+char g_vpulseTPeriod[64] = "2s";
+
+bool g_showIPulsePopup = false;
+char g_ipulseNameBuffer[64] = "I3";
+char g_ipulseIInitial[64] = "0";
+char g_ipulseIOn[64] = "1";
+char g_ipulseTDelay[64] = "1s";
+char g_ipulseTRise[64] = "10n";
+char g_ipulseTFall[64] = "10n";
+char g_ipulseTOn[64] = "1s";
+char g_ipulseTPeriod[64] = "2s";
+
+bool g_showVDeltaPopup = false;
+char g_vdeltaNameBuffer[64] = "Vd1";
+char g_vdeltaTPulse[64] = "1s";
+char g_vdeltaArea[64] = "1";
+
+bool g_showIDeltaPopup = false;
+char g_ideltaNameBuffer[64] = "Id1";
+char g_ideltaTPulse[64] = "1s";
+char g_ideltaArea[64] = "1";
+
 
 // ================ Simulation Engine and Circuit Logic ================
 // This is the core simulation engine ported from your original project.
@@ -249,30 +298,76 @@ public:
     std::string getType() const override { return "Inductor"; }
 };
 
+
 class VoltageSource : public Element {
 public:
-    double dcOffset;
-    double amplitude = 0;
-    double frequency = 0;
-    bool isSine = false;
+    enum class Type { DC, SINE, PULSE, DELTA };
+    Type sourceType = Type::DC;
 
-    VoltageSource(const std::string &elemName, Node* n1, Node* n2, double offset, double amp = 0, double freq = 0)
-            : Element(elemName, n1, n2, offset),
-              dcOffset(offset),
-              amplitude(amp),
-              frequency(freq) {
-        if (amp > 0 && freq > 0) {
-            isSine = true;
-        }
+    // SINE parameters
+    double dcOffset = 0.0;
+    double amplitude = 0.0;
+    double frequency = 0.0;
+
+    // PULSE parameters
+    double v_initial = 0.0;
+    double v_on = 0.0;
+    double t_delay = 0.0;
+    double t_rise = 0.0;
+    double t_fall = 0.0;
+    double t_on = 0.0;
+    double t_period = 0.0;
+
+    // DELTA parameters
+    double t_pulse = 0.0;
+    double area = 1.0;
+
+    // Constructors
+    VoltageSource(const std::string &elemName, Node* n1, Node* n2, double val)
+            : Element(elemName, n1, n2, val) {
+        sourceType = Type::DC;
+        dcOffset = val;
+    }
+    VoltageSource(const std::string &elemName, Node* n1, Node* n2, double offset, double amp, double freq)
+            : Element(elemName, n1, n2, offset), dcOffset(offset), amplitude(amp), frequency(freq) {
+        sourceType = Type::SINE;
     }
 
     std::string getType() const override { return "VoltageSource"; }
 
-    void setValueAtTime(double time) {
-        if (isSine) {
-            this->value = dcOffset + amplitude * sin(2 * M_PI * frequency * time);
-        } else {
-            this->value = dcOffset;
+    // --- THIS IS THE CORRECTED FUNCTION SIGNATURE ---
+    void setValueAtTime(double t, double step) {
+        switch (sourceType) {
+            case Type::SINE:
+                this->value = dcOffset + amplitude * sin(2 * M_PI * frequency * t);
+                break;
+            case Type::PULSE: {
+                if (t < t_delay) { this->value = v_initial; return; }
+                double localTime = t - t_delay;
+                double cycleTime = fmod(localTime, t_period);
+                if (t_rise > 0 && cycleTime < t_rise) {
+                    this->value = v_initial + (v_on - v_initial) * (cycleTime / t_rise);
+                } else if (cycleTime < t_rise + t_on) {
+                    this->value = v_on;
+                } else if (t_fall > 0 && cycleTime < t_rise + t_on + t_fall) {
+                    this->value = v_on - (v_on - v_initial) * ((cycleTime - t_rise - t_on) / t_fall);
+                } else {
+                    this->value = v_initial;
+                }
+                break;
+            }
+            case Type::DELTA:
+                // This logic now works because it receives the 'step' value
+                if (std::abs(t - t_pulse) < (step / 2.0)) {
+                    this->value = area / step;
+                } else {
+                    this->value = 0.0;
+                }
+                break;
+            case Type::DC:
+            default:
+                this->value = dcOffset;
+                break;
         }
     }
 };
@@ -280,25 +375,65 @@ public:
 
 class CurrentSource : public Element {
 public:
-    double dcOffset;
-    double amplitude = 0;
-    double frequency = 0;
-    bool isSine = false;
+    enum class Type { DC, SINE, PULSE, DELTA };
+    Type sourceType = Type::DC;
+
+    // SINE/DC parameters
+    double dcOffset = 0.0;
+    double amplitude = 0.0;
+    double frequency = 0.0;
+
+    // PULSE parameters
+    double i_initial = 0.0;
+    double i_on = 0.0;
+    double t_delay = 0.0;
+    double t_rise = 0.0;
+    double t_fall = 0.0;
+    double t_on = 0.0;
+    double t_period = 0.0;
+
+    // DELTA parameters
+    double t_pulse = 0.0;
+    double area = 1.0;
 
     CurrentSource(const std::string &elemName, Node* a, Node* b, double offset, double amp = 0, double freq = 0)
             : Element(elemName, a, b, offset), dcOffset(offset), amplitude(amp), frequency(freq) {
-        if (amp != 0 && freq != 0) {
-            isSine = true;
-        }
+        if (amp != 0 && freq != 0) sourceType = Type::SINE;
+        else sourceType = Type::DC;
     }
 
     std::string getType() const override { return "CurrentSource"; }
 
-    void setValueAtTime(double time) {
-        if (isSine) {
-            this->value = dcOffset + amplitude * sin(2 * M_PI * frequency * time);
-        } else {
-            this->value = dcOffset;
+    void setValueAtTime(double t, double step) {
+        switch (sourceType) {
+            case Type::SINE:
+                this->value = dcOffset + amplitude * sin(2 * M_PI * frequency * t);
+                break;
+            case Type::PULSE: { // <<< ADD THIS OPENING BRACE
+                if (t < t_delay) { this->value = i_initial; return; }
+                double localTime = t - t_delay;
+                double cycleTime = fmod(localTime, t_period);
+                if (t_rise > 0 && cycleTime < t_rise) {
+                    this->value = i_initial + (i_on - i_initial) * (cycleTime / t_rise);
+                } else if (cycleTime < t_rise + t_on) {
+                    this->value = i_on;
+                } else if (t_fall > 0 && cycleTime < t_rise + t_on + t_fall) {
+                    this->value = i_on - (i_on - i_initial) * ((cycleTime - t_rise - t_on) / t_fall);
+                } else {
+                    this->value = i_initial;
+                }
+            } break;
+            case Type::DELTA:
+                if (std::abs(t - t_pulse) < (step / 2.0)) {
+                    this->value = area / step;
+                } else {
+                    this->value = 0.0;
+                }
+                break;
+            case Type::DC:
+            default:
+                this->value = dcOffset;
+                break;
         }
     }
 };
@@ -426,10 +561,10 @@ public:
                     if (ni != -1) I[ni] += prevI;
                 }
                 else if (auto cs = dynamic_cast<CurrentSource*>(e)) {
-                    cs->setValueAtTime(t); // Update to its value at the current time
+                    cs->setValueAtTime(t, step);
                     double I_inst = cs->getValue();
-                    if (pi != -1) I[pi] -= I_inst; // Current leaves the positive node
-                    if (ni != -1) I[ni] += I_inst; // Current enters the negative node
+                    if (pi != -1) I[pi] -= I_inst;
+                    if (ni != -1) I[ni] += I_inst;
                 }
             }
 
@@ -440,7 +575,7 @@ public:
                 int pi = (pn->getName() != this->groundName) ? nodeIndex.at(pn->getName()) : -1;
                 int ni = (nn->getName() != this->groundName) ? nodeIndex.at(nn->getName()) : -1;
 
-                vs->setValueAtTime(t);
+                vs->setValueAtTime(t, step);
                 if (pi != -1) { B[pi][k] = 1.0; D[k][pi] = 1.0; }
                 if (ni != -1) { B[ni][k] = -1.0; D[k][ni] = -1.0; }
                 F[k] = vs->getValue();
@@ -898,7 +1033,49 @@ void buildCircuit() {
             case DIODE: g_circuit.addElement(new Diode(e.name, n1, n2, e.value)); break;
             case VSIN: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
             case CSIN: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
-
+            case VPULSE: {
+                auto vs = new VoltageSource(e.name, n1, n2, 0.0); // Create a base VSource
+                vs->sourceType = VoltageSource::Type::PULSE;
+                // Copy all the pulse parameters from the PlacedElement to the simulation object
+                vs->v_initial = e.v_initial;
+                vs->v_on = e.v_on;
+                vs->t_delay = e.t_delay;
+                vs->t_rise = e.t_rise;
+                vs->t_fall = e.t_fall;
+                vs->t_on = e.t_on;
+                vs->t_period = e.t_period;
+                g_circuit.addElement(vs);
+                break;
+            }
+            case IPULSE: {
+                auto cs = new CurrentSource(e.name, n1, n2, e.i_initial);
+                cs->sourceType = CurrentSource::Type::PULSE;
+                cs->i_initial = e.i_initial;
+                cs->i_on      = e.i_on;
+                cs->t_delay   = e.t_delay;
+                cs->t_rise    = e.t_rise;
+                cs->t_fall    = e.t_fall;
+                cs->t_on      = e.t_on;
+                cs->t_period  = e.t_period;
+                g_circuit.addElement(cs);
+                break;
+            }
+            case VDELTA: {
+                auto vs = new VoltageSource(e.name, n1, n2, 0.0); // DC value is 0
+                vs->sourceType = VoltageSource::Type::DELTA;
+                vs->t_pulse = e.t_pulse;
+                vs->area = e.area;
+                g_circuit.addElement(vs);
+                break;
+            }
+            case IDELTA: {
+                auto cs = new CurrentSource(e.name, n1, n2, 0.0); // DC value is 0
+                cs->sourceType = CurrentSource::Type::DELTA;
+                cs->t_pulse = e.t_pulse;
+                cs->area = e.area;
+                g_circuit.addElement(cs);
+                break;
+            }
             default: break;
         }
     }
@@ -1001,6 +1178,10 @@ void RenderToolbar() {
     if (ImGui::Button("GND")) { g_currentTool = GROUND; } ImGui::SameLine();
     if (ImGui::Button("VAC")) { g_showVACPopup = true; } ImGui::SameLine();
     if (ImGui::Button("IAC")) { g_showIACPopup = true; } ImGui::SameLine();
+    if (ImGui::Button("VPULSE")) { g_showVPulsePopup = true; } ImGui::SameLine();
+    if (ImGui::Button("IPULSE")) { g_showIPulsePopup = true; } ImGui::SameLine();
+    if (ImGui::Button("VDelta")) { g_showVDeltaPopup = true; } ImGui::SameLine();
+    if (ImGui::Button("IDelta")) { g_showIDeltaPopup = true; } ImGui::SameLine();
     if (ImGui::Button("VM")) { g_currentTool = VOLTMETER; } ImGui::SameLine();
 
     if (ImGui::Button("Wire")) {
@@ -1346,6 +1527,110 @@ void RenderIACPopup() {
 }
 
 
+void RenderVPulsePopup() {
+    if (g_showVPulsePopup) {
+        ImGui::OpenPopup("Pulse Voltage Source");
+        g_showVPulsePopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Pulse Voltage Source", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Pulse Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_vpulseNameBuffer, 64);
+        ImGui::InputText("Initial Value (V)", g_vpulseVInitial, 64);
+        ImGui::InputText("Pulsed Value (V)", g_vpulseVOn, 64);
+        ImGui::InputText("Delay Time (s)", g_vpulseTDelay, 64);
+        ImGui::InputText("Rise Time (s)", g_vpulseTRise, 64);
+        ImGui::InputText("Fall Time (s)", g_vpulseTFall, 64);
+        ImGui::InputText("Pulse Width (s)", g_vpulseTOn, 64);
+        ImGui::InputText("Period (s)", g_vpulseTPeriod, 64);
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            g_currentTool = VPULSE;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+}
+
+
+void RenderIPulsePopup() {
+    if (g_showIPulsePopup) {
+        ImGui::OpenPopup("Pulse Current Source");
+        g_showIPulsePopup = false;
+    }
+
+    if (ImGui::BeginPopupModal("Pulse Current Source", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Pulse Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_ipulseNameBuffer, 64);
+        ImGui::InputText("Initial Value (A)", g_ipulseIInitial, 64);
+        ImGui::InputText("Pulsed Value (A)", g_ipulseIOn, 64);
+        ImGui::InputText("Delay Time (s)", g_ipulseTDelay, 64);
+        ImGui::InputText("Rise Time (s)", g_ipulseTRise, 64);
+        ImGui::InputText("Fall Time (s)", g_ipulseTFall, 64);
+        ImGui::InputText("Pulse Width (s)", g_ipulseTOn, 64);
+        ImGui::InputText("Period (s)", g_ipulseTPeriod, 64);
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            g_currentTool = IPULSE;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+}
+
+
+void RenderVDeltaPopup() {
+    if (g_showVDeltaPopup) {
+        ImGui::OpenPopup("Delta Voltage Source");
+        g_showVDeltaPopup = false;
+    }
+    if (ImGui::BeginPopupModal("Delta Voltage Source", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delta Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_vdeltaNameBuffer, 64);
+        ImGui::InputText("Pulse Time (s)", g_vdeltaTPulse, 64);
+        ImGui::InputText("Area", g_vdeltaArea, 64);
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            g_currentTool = VDELTA;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+}
+
+
+void RenderIDeltaPopup() {
+    if (g_showIDeltaPopup) {
+        ImGui::OpenPopup("Delta Current Source");
+        g_showIDeltaPopup = false;
+    }
+    if (ImGui::BeginPopupModal("Delta Current Source", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delta Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_ideltaNameBuffer, 64);
+        ImGui::InputText("Pulse Time (s)", g_ideltaTPulse, 64);
+        ImGui::InputText("Area", g_ideltaArea, 64);
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            g_currentTool = IDELTA;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+}
+
+
 // ========================================================================================================
 // Helper function to format a number with SI prefixes (k, M, m, u, n)
 std::string formatValueWithSI(double value) {
@@ -1517,11 +1802,67 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImV
 
         case CSIN: {
             drawList->AddCircle(pos, 15.0f, color, 0, thickness);
-//            if (element.isVertical) { /* ... */ } else { /* ... */ }
-//            // Add a small sine wave to distinguish it
             drawList->PathLineTo(ImVec2(pos.x - 7, pos.y - 7));
             drawList->PathBezierCubicCurveTo(ImVec2(pos.x - 3, pos.y - 11), ImVec2(pos.x + 3, pos.y - 3), ImVec2(pos.x + 7, pos.y - 7), 10);
             drawList->PathStroke(color, ImDrawFlags_None, thickness);
+            break;
+        }
+
+        case VPULSE: {
+            drawList->AddCircle(pos, 15.0f, color, 0, thickness);
+            // Draw a small pulse/square wave symbol
+            ImVec2 p = ImVec2(pos.x - 8, pos.y + 5);
+            drawList->AddLine(p, ImVec2(p.x + 5, p.y), color, thickness);
+            drawList->AddLine(ImVec2(p.x + 5, p.y), ImVec2(p.x + 5, p.y - 10), color, thickness);
+            drawList->AddLine(ImVec2(p.x + 5, p.y - 10), ImVec2(p.x + 11, p.y - 10), color, thickness);
+            drawList->AddLine(ImVec2(p.x + 11, p.y - 10), ImVec2(p.x + 11, p.y), color, thickness);
+            drawList->AddLine(ImVec2(p.x + 11, p.y), ImVec2(p.x + 16, p.y), color, thickness);
+            break;
+        }
+
+        case IPULSE: {
+            drawList->AddCircle(pos, 15.0f, color, 0, thickness);
+            if (element.isVertical) {
+                drawList->AddLine(ImVec2(pos.x, pos.y - 10), ImVec2(pos.x, pos.y + 10), color, thickness);
+                drawList->AddLine(ImVec2(pos.x, pos.y + 10), ImVec2(pos.x - 4, pos.y + 5), color, thickness);
+                drawList->AddLine(ImVec2(pos.x, pos.y + 10), ImVec2(pos.x + 4, pos.y + 5), color, thickness);
+            } else {
+                drawList->AddLine(ImVec2(pos.x - 10, pos.y), ImVec2(pos.x + 10, pos.y), color, thickness);
+                drawList->AddLine(ImVec2(pos.x + 10, pos.y), ImVec2(pos.x + 5, pos.y - 4), color, thickness);
+                drawList->AddLine(ImVec2(pos.x + 10, pos.y), ImVec2(pos.x + 5, pos.y + 4), color, thickness);
+            }
+            ImVec2 p = ImVec2(pos.x - 7, pos.y - 7);
+            drawList->AddLine(ImVec2(p.x, p.y+4), ImVec2(p.x, p.y), color, thickness);
+            drawList->AddLine(ImVec2(p.x, p.y), ImVec2(p.x+7, p.y), color, thickness);
+            drawList->AddLine(ImVec2(p.x+7, p.y), ImVec2(p.x+7, p.y+4), color, thickness);
+            break;
+        }
+
+        case VDELTA: {
+            drawList->AddCircle(pos, 15.0f, color, 0, thickness);
+            // Draw a spike symbol for delta
+            drawList->AddLine(ImVec2(pos.x, pos.y + 10), ImVec2(pos.x, pos.y - 2), color, thickness);
+            drawList->AddLine(ImVec2(pos.x, pos.y - 2), ImVec2(pos.x - 4, pos.y + 3), color, thickness);
+            drawList->AddLine(ImVec2(pos.x, pos.y - 2), ImVec2(pos.x + 4, pos.y + 3), color, thickness);
+            break;
+        }
+
+        case IDELTA: {
+            // Draw C-Source Body (Circle + Arrow)
+            drawList->AddCircle(pos, 15.0f, color, 0, thickness);
+            if (element.isVertical) {
+                drawList->AddLine(ImVec2(pos.x, pos.y - 10), ImVec2(pos.x, pos.y + 10), color, thickness);
+                drawList->AddLine(ImVec2(pos.x, pos.y + 10), ImVec2(pos.x - 4, pos.y + 5), color, thickness);
+                drawList->AddLine(ImVec2(pos.x, pos.y + 10), ImVec2(pos.x + 4, pos.y + 5), color, thickness);
+            } else {
+                drawList->AddLine(ImVec2(pos.x - 10, pos.y), ImVec2(pos.x + 10, pos.y), color, thickness);
+                drawList->AddLine(ImVec2(pos.x + 10, pos.y), ImVec2(pos.x + 5, pos.y - 4), color, thickness);
+                drawList->AddLine(ImVec2(pos.x + 10, pos.y), ImVec2(pos.x + 5, pos.y + 4), color, thickness);
+            }
+            // Draw a spike symbol for delta
+            drawList->AddLine(ImVec2(pos.x, pos.y - 7), ImVec2(pos.x, pos.y + 3), color, thickness);
+            drawList->AddLine(ImVec2(pos.x, pos.y - 7), ImVec2(pos.x - 3, pos.y - 2), color, thickness);
+            drawList->AddLine(ImVec2(pos.x, pos.y - 7), ImVec2(pos.x + 3, pos.y - 2), color, thickness);
             break;
         }
 
@@ -1556,6 +1897,18 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImV
             std::string amp_str = formatValueWithSI(element.amp);
             std::string freq_str = formatValueWithSI(element.freq);
             snprintf(display_str, 128, "SINE(%s %s %s)", offset_str.c_str(), amp_str.c_str(), freq_str.c_str());
+        } else if (element.type == VPULSE) {
+            std::string offset_str = formatValueWithSI(element.v_initial);
+            std::string high_str = formatValueWithSI(element.v_on);
+            std::string period_str = formatValueWithSI(element.t_period);
+            std::string on_str = formatValueWithSI(element.t_on); // Using Ton as "dutyperiod"
+            snprintf(display_str, 128, "VPULSE(%s %s %s %s)", offset_str.c_str(), high_str.c_str(), period_str.c_str(), on_str.c_str());
+        } else if (element.type == IPULSE) {
+            std::string offset_str = formatValueWithSI(element.i_initial);
+            std::string high_str = formatValueWithSI(element.i_on);
+            std::string period_str = formatValueWithSI(element.t_period);
+            std::string on_str = formatValueWithSI(element.t_on);
+            snprintf(display_str, 128, "IPULSE(%s %s %s %s)", offset_str.c_str(), high_str.c_str(), period_str.c_str(), on_str.c_str());
         } else {
             // Regular formatting for all other components
             snprintf(display_str, 128, "%s", formatValueWithSI(element.value).c_str());
@@ -1732,33 +2085,58 @@ void RenderCanvas() {
                     g_currentTool = NONE;
                 }
             } else if (g_currentTool != NONE) {
-                std::string name;
-                double value = 0, amp = 0, freq = 0;
+                PlacedElement new_elem{};
+                new_elem.type = g_currentTool;
+                new_elem.pos = snapped_pos;
+                new_elem.isVertical = g_previewIsVertical;
 
-                // Check if the tool is our new AC Source
                 if (g_currentTool == VSIN) {
-                    name = g_vacNameBuffer;
-                    value = parseNumber(g_vacDcOffsetText); // DC offset goes into the main 'value' field
-                    amp = parseNumber(g_vacAmpText);
-                    freq = parseNumber(g_vacFreqText);
-                } else if (g_currentTool == CSIN) { // <<< ADD THIS BLOCK
-                    name = g_iacNameBuffer;
-                    value = parseNumber(g_iacDcOffsetText);
-                    amp = parseNumber(g_iacAmpText);
-                    freq = parseNumber(g_iacFreqText);
-                } else {
-                    // Otherwise, use the regular component dialog buffers
-                    name = g_componentNameBuffer;
-                    value = parseNumber(g_componentValueBuffer);
+                    new_elem.name = g_vacNameBuffer;
+                    new_elem.value = parseNumber(g_vacDcOffsetText);
+                    new_elem.amp = parseNumber(g_vacAmpText);
+                    new_elem.freq = parseNumber(g_vacFreqText);
+                } else if (g_currentTool == CSIN) {
+                    new_elem.name = g_iacNameBuffer;
+                    new_elem.value = parseNumber(g_iacDcOffsetText);
+                    new_elem.amp = parseNumber(g_iacAmpText);
+                    new_elem.freq = parseNumber(g_iacFreqText);
+                } else if (g_currentTool == VPULSE) {
+                    new_elem.name = g_vpulseNameBuffer;
+                    new_elem.v_initial = parseNumber(g_vpulseVInitial);
+                    new_elem.v_on = parseNumber(g_vpulseVOn);
+                    new_elem.t_delay = parseNumber(g_vpulseTDelay);
+                    new_elem.t_rise = parseNumber(g_vpulseTRise);
+                    new_elem.t_fall = parseNumber(g_vpulseTFall);
+                    new_elem.t_on = parseNumber(g_vpulseTOn);
+                    new_elem.t_period = parseNumber(g_vpulseTPeriod);
+                } else if (g_currentTool == IPULSE) {
+                    new_elem.name = g_ipulseNameBuffer;
+                    new_elem.i_initial = parseNumber(g_ipulseIInitial);
+                    new_elem.i_on = parseNumber(g_ipulseIOn);
+                    new_elem.t_delay = parseNumber(g_ipulseTDelay);
+                    new_elem.t_rise = parseNumber(g_ipulseTRise);
+                    new_elem.t_fall = parseNumber(g_ipulseTFall);
+                    new_elem.t_on = parseNumber(g_ipulseTOn);
+                    new_elem.t_period = parseNumber(g_ipulseTPeriod);
+                } else if (g_currentTool == VDELTA) {
+                    new_elem.name = g_vdeltaNameBuffer;
+                    new_elem.t_pulse = parseNumber(g_vdeltaTPulse);
+                    new_elem.area = parseNumber(g_vdeltaArea);
+                } else if (g_currentTool == IDELTA) {
+                    new_elem.name = g_ideltaNameBuffer;
+                    new_elem.t_pulse = parseNumber(g_ideltaTPulse);
+                    new_elem.area = parseNumber(g_ideltaArea);
+                } else { // Regular components (R, C, L, D, I)
+                    new_elem.name = g_componentNameBuffer;
+                    new_elem.value = parseNumber(g_componentValueBuffer);
                 }
 
                 if (g_currentTool == GROUND) {
-                    name = "GND";
-                    value = 0.0;
+                    new_elem.name = "GND";
+                    new_elem.value = 0.0;
                 }
 
-                // Add the new element to our list with all its properties
-                g_placedElements.push_back({g_currentTool, snapped_pos, name, value, g_previewIsVertical, amp, freq});
+                g_placedElements.push_back(new_elem);
 
                 g_currentTool = NONE;
                 g_previewIsVertical = false;
@@ -1871,6 +2249,10 @@ int main() {
         RenderComponentPopup();
         RenderVACPopup();
         RenderIACPopup();
+        RenderVPulsePopup();
+        RenderIPulsePopup();
+        RenderVDeltaPopup();
+        RenderIDeltaPopup();
         RenderRunPopup();
         RenderDCResultsWindow();
         RenderTransientPlotWindow();
