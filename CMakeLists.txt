@@ -26,6 +26,7 @@ add_executable(OOP_Phase2_complete
         # ImPlot source files
         dependencies/implot-master/implot.cpp
         dependencies/implot-master/implot_items.cpp
+        save_load.h
 )
 
 target_include_directories(OOP_Phase2_complete PRIVATE

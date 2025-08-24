@@ -38,7 +38,7 @@
 #include "portable-file-dialogs.h"
 
 // ----------------- PROJECT HEADERS -----------------
-//#include "save_load.h"
+#include "save_load.h"
 //#include "recent_files.h"
 
 
@@ -201,6 +201,34 @@ char g_depCtrlNBuffer[64] = "n2";
 
 std::string g_depPopupError;
 
+int g_selectedIndex = -1; // -1 means no element is selected
+bool g_isMovingElement = false;
+ImVec2 g_originalPos;
+
+
+// --- State for Plot Math Channel ---
+// A list of all available signal names for dropdowns
+std::vector<const char*> g_plot_signal_names;
+// Maps dropdown index back to the signal name and type (V or I)
+std::map<int, std::pair<std::string, char>> g_plot_signal_map;
+// Indices of the two signals selected for the math operation
+int g_mathSignal1_idx = -1;
+int g_mathSignal2_idx = -1;
+// Booleans to control visibility of the calculated traces
+bool g_showAddTrace = false;
+bool g_showSubtractTrace = false;
+// Storage for the calculated data
+std::vector<double> g_addTrace;
+std::vector<double> g_subtractTrace;
+
+
+// --- State for Measurement Cursors ---
+bool g_cursor1_active = false;
+bool g_cursor2_active = false;
+ImPlotPoint g_cursor1_pos; // From implot.h, has .x and .y
+ImPlotPoint g_cursor2_pos;
+int g_cursor1_series_idx = -1; // Which signal the cursor is attached to
+int g_cursor2_series_idx = -1;
 
 // ================ Simulation Engine and Circuit Logic ================
 // This is the core simulation engine ported from your original project.
@@ -1167,6 +1195,173 @@ void buildCircuit() {
 }
 
 
+// This function converts the visual schematic into a savable SCircuit object
+SCircuit createSaveDataFromCanvas() {
+    SCircuit ckt_data;
+
+    // 1. Perform connection analysis to find all logical nodes
+    g_circuit.reset();
+    g_allConnectors.clear();
+    g_connectorGraph.clear();
+    g_connectorToNodeName.clear();
+    g_connectorIdCounter = 0;
+
+    for (const auto& e : g_placedElements) {
+        if (e.type == GROUND) {
+            addConnector(e.pos);
+        } else {
+            if (e.isVertical) {
+                addConnector(ImVec2(e.pos.x, e.pos.y - PIN_OFFSET));
+                addConnector(ImVec2(e.pos.x, e.pos.y + PIN_OFFSET));
+            } else {
+                addConnector(ImVec2(e.pos.x - PIN_OFFSET, e.pos.y));
+                addConnector(ImVec2(e.pos.x + PIN_OFFSET, e.pos.y));
+            }
+        }
+    }
+
+    for (const auto& w : g_wires) {
+        int id1 = addConnector(w.p1);
+        int id2 = addConnector(w.p2);
+        g_connectorGraph[id1].push_back(id2);
+        g_connectorGraph[id2].push_back(id1);
+    }
+
+    std::map<int, int> parent;
+    std::function<int(int)> find =
+            [&](int i) -> int {
+                if (parent.find(i) == parent.end() || parent[i] == i) return i;
+                return parent[i] = find(parent[i]);
+            };
+    auto unite = [&](int i, int j) {
+        int root_i = find(i);
+        int root_j = find(j);
+        if (root_i != root_j) parent[root_i] = root_j;
+    };
+
+    for (const auto& c : g_allConnectors) parent[c.id] = c.id;
+    for (const auto& pair : g_connectorGraph) {
+        for (int neighbor : pair.second) {
+            unite(pair.first, neighbor);
+        }
+    }
+
+    int ground_root_id = -1;
+    for (const auto& e : g_placedElements) {
+        if (e.type == GROUND) {
+            int conn_id = addConnector(e.pos);
+            ground_root_id = find(conn_id);
+            break;
+        }
+    }
+
+    if (ground_root_id == -1) {
+        throw NoGroundException();
+    }
+
+    std::map<int, std::string> root_to_name;
+    int node_idx_counter = 1;
+    for (const auto& c : g_allConnectors) {
+        int root = find(c.id);
+        if (root_to_name.find(root) == root_to_name.end()) {
+            if (root == ground_root_id) {
+                root_to_name[root] = "0"; // Special name for ground
+            } else {
+                root_to_name[root] = "n" + std::to_string(node_idx_counter++);
+            }
+        }
+        g_connectorToNodeName[c.id] = root_to_name[root];
+    }
+
+    // 2. Create the list of SNodes for the save file
+    std::map<std::string, int> node_name_to_id;
+    int next_node_id = 0;
+    for (const auto& pair : root_to_name) {
+        std::string name = pair.second;
+        node_name_to_id[name] = next_node_id;
+
+        // Find a representative position for the node for saving
+        ImVec2 node_pos = {0,0};
+        for (const auto& c : g_allConnectors) {
+            if (find(c.id) == pair.first) {
+                node_pos = c.pos;
+                break;
+            }
+        }
+        ckt_data.Snodes.push_back({next_node_id, name, (int)node_pos.x, (int)node_pos.y});
+        next_node_id++;
+    }
+
+    for (const auto& e : g_placedElements) {
+        if (e.type == WIRE || e.type == VOLTMETER) continue;
+
+        SElement se;
+        se.name = e.name;
+        se.x = (int)e.pos.x;
+        se.y = (int)e.pos.y;
+        se.isVertical = e.isVertical;
+        se.value = e.value;
+
+        // Find node IDs for the element's pins
+        if (e.type != GROUND) {
+            ImVec2 p1_pos = e.isVertical ? ImVec2(e.pos.x, e.pos.y - PIN_OFFSET) : ImVec2(e.pos.x - PIN_OFFSET, e.pos.y);
+            ImVec2 p2_pos = e.isVertical ? ImVec2(e.pos.x, e.pos.y + PIN_OFFSET) : ImVec2(e.pos.x + PIN_OFFSET, e.pos.y);
+            se.n1 = node_name_to_id.at(g_connectorToNodeName.at(addConnector(p1_pos)));
+            se.n2 = node_name_to_id.at(g_connectorToNodeName.at(addConnector(p2_pos)));
+        } else {
+            se.n1 = node_name_to_id.at(g_connectorToNodeName.at(addConnector(e.pos)));
+            se.n2 = se.n1;
+        }
+
+        // Map ToolType enum to a string for saving
+        switch (e.type) {
+            case RESISTOR:  se.kind = "R"; break;
+            case CAPACITOR: se.kind = "C"; break;
+            case INDUCTOR:  se.kind = "L"; break;
+            case DIODE:     se.kind = "D"; break;
+            case GROUND:    se.kind = "GND"; break;
+            case VSOURCE: case VSIN: case VPULSE: case VDELTA: case VCVS:
+                se.kind = "V"; break;
+            case CSOURCE: case CSIN: case IPULSE: case IDELTA: case VCCS:
+                se.kind = "I"; break;
+        }
+
+        // Save source-specific parameters
+        if (e.type == VSOURCE || e.type == CSOURCE) { se.sourceType = "DC"; }
+        else if (e.type == VSIN || e.type == CSIN) { se.sourceType = "SINE"; se.amp = e.amp; se.freq = e.freq; }
+        else if (e.type == VPULSE) {
+            se.sourceType = "PULSE";
+            se.v_initial = e.v_initial; se.v_on = e.v_on;
+            se.t_delay = e.t_delay; se.t_rise = e.t_rise; se.t_fall = e.t_fall; se.t_on = e.t_on; se.t_period = e.t_period;
+        } else if (e.type == IPULSE) {
+            se.sourceType = "PULSE";
+            se.i_initial = e.i_initial; se.i_on = e.i_on;
+            se.t_delay = e.t_delay; se.t_rise = e.t_rise; se.t_fall = e.t_fall; se.t_on = e.t_on; se.t_period = e.t_period;
+        }
+        else if (e.type == VDELTA || e.type == IDELTA) {
+            se.sourceType = "DELTA";
+            se.t_pulse = e.t_pulse; se.area = e.area;
+        } else if (e.type == VCVS || e.type == VCCS) {
+            se.sourceType = (e.type == VCVS) ? "VCVS" : "VCCS";
+            se.gain = e.gain;
+            se.ctrlNodeP_name = e.ctrlNodeP_name;
+            se.ctrlNodeN_name = e.ctrlNodeN_name;
+        }
+
+        ckt_data.Selements.push_back(se);
+    }
+
+    for (const auto& w : g_wires) {
+        SWire sw;
+        sw.points.push_back({(int)w.p1.x, (int)w.p1.y});
+        sw.points.push_back({(int)w.p2.x, (int)w.p2.y});
+        ckt_data.Swires.push_back(sw);
+    }
+
+    return ckt_data;
+}
+
+
 // ================ (Add after Global State Variables) ================
 double parseNumber(std::string input) {
     if (input.empty()) return 0.0;
@@ -1501,23 +1696,155 @@ void RenderDCResultsWindow() {
 }
 
 
+// Interpolates to find the y-value on a signal for a given x-value (time)
+double interpolate(const std::vector<double>& x_data, const std::vector<double>& y_data, double x) {
+    if (x <= x_data.front()) return y_data.front();
+    if (x >= x_data.back()) return y_data.back();
+
+    auto it = std::lower_bound(x_data.begin(), x_data.end(), x);
+    size_t i = std::distance(x_data.begin(), it);
+
+    double x1 = x_data[i-1], y1 = y_data[i-1];
+    double x2 = x_data[i], y2 = y_data[i];
+
+    return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+}
+
+
 void RenderTransientPlotWindow() {
-    if (!g_showTransientPlot) return;
+    if (!g_showTransientPlot) {
+        g_showAddTrace = false;
+        g_showSubtractTrace = false;
+        return;
+    }
 
     ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
     ImGui::Begin("Transient Analysis Results", &g_showTransientPlot);
 
+    // --- 1. Prepare signals and math (unchanged) ---
+    g_plot_signal_names.clear();
+    g_plot_signal_map.clear();
+    int current_idx = 0;
+    for (const auto& pair : g_waves.V) {
+        g_plot_signal_names.push_back(pair.first.c_str());
+        g_plot_signal_map[current_idx++] = {pair.first, 'V'};
+    }
+    for (const auto& pair : g_waves.I) {
+        g_plot_signal_names.push_back(pair.first.c_str());
+        g_plot_signal_map[current_idx++] = {pair.first, 'I'};
+    }
+    if ((g_showAddTrace || g_showSubtractTrace) && g_mathSignal1_idx != -1 && g_mathSignal2_idx != -1) {
+        auto signal1_info = g_plot_signal_map[g_mathSignal1_idx];
+        auto signal2_info = g_plot_signal_map[g_mathSignal2_idx];
+        const auto& data1 = (signal1_info.second == 'V') ? g_waves.V.at(signal1_info.first) : g_waves.I.at(signal1_info.first);
+        const auto& data2 = (signal2_info.second == 'V') ? g_waves.V.at(signal2_info.first) : g_waves.I.at(signal2_info.first);
+
+        if (data1.size() == data2.size()) {
+            g_addTrace.resize(data1.size());
+            g_subtractTrace.resize(data1.size());
+            for (size_t i = 0; i < data1.size(); ++i) {
+                g_addTrace[i] = data1[i] + data2[i];
+                g_subtractTrace[i] = data1[i] - data2[i];
+            }
+        }
+    }
+
+    // --- 2. Math Channel Controls (unchanged) ---
+    if (ImGui::CollapsingHeader("Math Channel")) {
+        ImGui::Combo("Signal A", &g_mathSignal1_idx, g_plot_signal_names.data(), g_plot_signal_names.size());
+        ImGui::Combo("Signal B", &g_mathSignal2_idx, g_plot_signal_names.data(), g_plot_signal_names.size());
+        ImGui::Checkbox("Plot Sum (A+B)", &g_showAddTrace);
+        ImGui::SameLine();
+        ImGui::Checkbox("Plot Difference (A-B)", &g_showSubtractTrace);
+    }
+
     if (ImPlot::BeginPlot("Waveforms")) {
         ImPlot::SetupAxes("Time (s)", "Value");
 
-        // Plot all requested node voltages
-        for (const auto& pair : g_waves.V) {
-            ImPlot::PlotLine(pair.first.c_str(), g_waves.t.data(), pair.second.data(), g_waves.t.size());
+        // Plot original and calculated traces (unchanged)
+        for (const auto& pair : g_waves.V) ImPlot::PlotLine(pair.first.c_str(), g_waves.t.data(), pair.second.data(), g_waves.t.size());
+        for (const auto& pair : g_waves.I) ImPlot::PlotLine(pair.first.c_str(), g_waves.t.data(), pair.second.data(), g_waves.t.size());
+
+        if (g_showAddTrace && !g_addTrace.empty()) {
+            std::string label = std::string(g_plot_signal_names[g_mathSignal1_idx]) + "+" + std::string(g_plot_signal_names[g_mathSignal2_idx]);
+            ImPlot::PlotLine(label.c_str(), g_waves.t.data(), g_addTrace.data(), g_waves.t.size());
+        }
+        if (g_showSubtractTrace && !g_subtractTrace.empty()) {
+            std::string label = std::string(g_plot_signal_names[g_mathSignal1_idx]) + "-" + std::string(g_plot_signal_names[g_mathSignal2_idx]);
+            ImPlot::PlotLine(label.c_str(), g_waves.t.data(), g_subtractTrace.data(), g_waves.t.size());
         }
 
-        // Plot all requested element currents
-        for (const auto& pair : g_waves.I) {
-            ImPlot::PlotLine(pair.first.c_str(), g_waves.t.data(), pair.second.data(), g_waves.t.size());
+        // --- B. Handle all hover and click interactions ---
+        if (ImPlot::IsPlotHovered()) {
+            // --- Accurate Hover Tooltip (now uses pixels) ---
+            ImVec2 mouse_pixels = ImGui::GetMousePos();
+            int closest_series = -1;
+            int closest_point_idx = -1;
+            float min_dist_sq = 100.0f; // 10 pixel radius
+
+            int series_id = 0;
+            auto find_closest_px = [&](const std::vector<double>& data) {
+                for (int i = 0; i < data.size(); ++i) {
+                    ImVec2 p_pixels = ImPlot::PlotToPixels({ g_waves.t[i], data[i] });
+                    float dx = mouse_pixels.x - p_pixels.x;
+                    float dy = mouse_pixels.y - p_pixels.y;
+                    float dist_sq = dx*dx + dy*dy;
+                    if (dist_sq < min_dist_sq) {
+                        min_dist_sq = dist_sq;
+                        closest_series = series_id;
+                        closest_point_idx = i;
+                    }
+                }
+                series_id++;
+            };
+            for(const auto& pair : g_waves.V) find_closest_px(pair.second);
+            for(const auto& pair : g_waves.I) find_closest_px(pair.second);
+
+            if (closest_point_idx != -1) {
+                auto signal_info = g_plot_signal_map.at(closest_series);
+                const auto &data = (signal_info.second == 'V') ? g_waves.V.at(signal_info.first) : g_waves.I.at(
+                        signal_info.first);
+                double found_x = g_waves.t.at(closest_point_idx);
+                double found_y = data.at(closest_point_idx);
+
+                ImPlot::GetPlotDrawList()->AddCircleFilled(ImPlot::PlotToPixels({found_x, found_y}), 5,
+                                                           IM_COL32(255, 0, 0, 255));
+                ImGui::BeginTooltip();
+                ImGui::Text("%s", signal_info.first.c_str());
+                ImGui::Text("Time:  %.4f s", found_x);
+                ImGui::Text("Value: %.4f", found_y);
+                ImGui::EndTooltip();
+
+                // Cursor Placement Logic
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    g_cursor1_active = true;
+                    g_cursor1_series_idx = closest_series;
+                    g_cursor1_pos = { found_x, found_y };
+                }
+                if (ImGui::GetIO().KeyShift && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    g_cursor2_active = true;
+                    g_cursor2_series_idx = closest_series;
+                    g_cursor2_pos = { found_x, found_y };
+                }
+            }
+        }
+
+        // --- C. Draw and Constrain Draggable Cursors ---
+        if (g_cursor1_active) {
+            if (ImPlot::DragPoint(0, &g_cursor1_pos.x, &g_cursor1_pos.y, ImVec4(1,1,0,1), 4)) {
+                // Point was dragged, now constrain it to the waveform
+                auto info = g_plot_signal_map[g_cursor1_series_idx];
+                const auto& data = (info.second == 'V') ? g_waves.V.at(info.first) : g_waves.I.at(info.first);
+                g_cursor1_pos.y = interpolate(g_waves.t, data, g_cursor1_pos.x);
+            }
+        }
+        if (g_cursor2_active) {
+            if (ImPlot::DragPoint(1, &g_cursor2_pos.x, &g_cursor2_pos.y, ImVec4(0,1,1,1), 4)) {
+                // Point was dragged, now constrain it to the waveform
+                auto info = g_plot_signal_map[g_cursor2_series_idx];
+                const auto& data = (info.second == 'V') ? g_waves.V.at(info.first) : g_waves.I.at(info.first);
+                g_cursor2_pos.y = interpolate(g_waves.t, data, g_cursor2_pos.x);
+            }
         }
 
         ImPlot::EndPlot();
@@ -1753,6 +2080,56 @@ void RenderDependentSourcePopup() {
 }
 
 
+void RenderCursorWindow() {
+    // Show this window only if at least one cursor is active
+    if (!g_cursor1_active && !g_cursor2_active) {
+        return;
+    }
+
+    // Begin a new window to display the measurements
+    ImGui::Begin("Cursor Measurements", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+
+    // --- Cursor 1 Data ---
+    ImGui::Text("Cursor 1");
+    ImGui::Separator();
+    if (g_cursor1_active) {
+        ImGui::Text("Time (Horz): %.4f s", g_cursor1_pos.x);
+        ImGui::Text("Value (Vert): %.4f", g_cursor1_pos.y);
+    } else {
+        ImGui::Text("Time (Horz): --");
+        ImGui::Text("Value (Vert): --");
+    }
+
+    ImGui::Spacing();
+
+    // --- Cursor 2 Data ---
+    ImGui::Text("Cursor 2");
+    ImGui::Separator();
+    if (g_cursor2_active) {
+        ImGui::Text("Time (Horz): %.4f s", g_cursor2_pos.x);
+        ImGui::Text("Value (Vert): %.4f", g_cursor2_pos.y);
+    } else {
+        ImGui::Text("Time (Horz): --");
+        ImGui::Text("Value (Vert): --");
+    }
+
+    ImGui::Spacing();
+
+    // --- Difference Data ---
+    ImGui::Text("Difference");
+    ImGui::Separator();
+    if (g_cursor1_active && g_cursor2_active) {
+        ImGui::Text("Horz (Δt): %.4f s", std::abs(g_cursor2_pos.x - g_cursor1_pos.x));
+        ImGui::Text("Vert (ΔV): %.4f", std::abs(g_cursor2_pos.y - g_cursor1_pos.y));
+    } else {
+        ImGui::Text("Horz (Δt): --");
+        ImGui::Text("Vert (ΔV): --");
+    }
+
+    ImGui::End();
+}
+
+
 // ========================================================================================================
 // Helper function to format a number with SI prefixes (k, M, m, u, n)
 std::string formatValueWithSI(double value) {
@@ -1782,10 +2159,14 @@ std::string formatValueWithSI(double value) {
 
 
 // --- Drawing constants ---
-void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImVec2& canvas_p0) {
-    const ImU32 color = IM_COL32(0, 0, 0, 255);
+void DrawComponent(ImDrawList* drawList, const PlacedElement& element, int index, const ImVec2& canvas_p0) {
+    // --- THIS IS THE MAIN CHANGE ---
+    // If this element's index matches the selected index, draw it in blue
+    const ImU32 color = (index == g_selectedIndex) ? IM_COL32(0, 100, 255, 255) : IM_COL32(0, 0, 0, 255);
+
     const float thickness = 1.5f;
     const ImVec2 pos = ImVec2(canvas_p0.x + element.pos.x, canvas_p0.y + element.pos.y);
+
 
     // Calculate start/end points based on rotation
     ImVec2 p1, p2;
@@ -2188,17 +2569,32 @@ void UpdateAndDrawDebugInfo(ImDrawList* drawList, const ImVec2& canvas_p0) {
 
 
 void HandleCanvasShortcuts() {
-    // This function only runs if the canvas is hovered and no pop-ups are active
     if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) || ImGui::IsAnyItemActive()) {
         return;
     }
 
-    // --- Action Keys (Highest Priority) ---
+    // --- Handle Escape key for canceling moves ---
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        g_currentTool = NONE;
-        g_isPlacingWire = false;
-        g_previewIsVertical = false;
-        return; // Action handled, do nothing else.
+        if (g_isMovingElement) {
+            // Cancel the move and restore original position
+            g_placedElements[g_selectedIndex].pos = g_originalPos;
+            g_isMovingElement = false;
+            g_selectedIndex = -1;
+        } else {
+            // Deselect the active tool
+            g_currentTool = NONE;
+            g_isPlacingWire = false;
+            g_previewIsVertical = false;
+        }
+        return;
+    }
+
+    // --- Handle Delete key ---
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete) && g_selectedIndex != -1) {
+        g_placedElements.erase(g_placedElements.begin() + g_selectedIndex);
+        g_selectedIndex = -1;
+        g_isMovingElement = false;
+        return;
     }
 
     // --- Rotation (Second Priority) ---
@@ -2228,6 +2624,27 @@ void HandleCanvasShortcuts() {
 }
 
 
+bool IsPointOnWire(const ImVec2& p, const Wire& wire) {
+    const float threshold = 3.0f; // How close the click must be
+    float dx = wire.p2.x - wire.p1.x;
+    float dy = wire.p2.y - wire.p1.y;
+
+    // If the wire is just a point, we can't connect to its middle
+    if (dx == 0 && dy == 0) return false;
+
+    // Check if the point is within the bounding box of the wire segment
+    if (p.x < std::min(wire.p1.x, wire.p2.x) - threshold || p.x > std::max(wire.p1.x, wire.p2.x) + threshold ||
+        p.y < std::min(wire.p1.y, wire.p2.y) - threshold || p.y > std::max(wire.p1.y, wire.p2.y) + threshold) {
+        return false;
+    }
+
+    // Calculate the distance from the point to the line
+    float dist = std::abs(dx * (wire.p1.y - p.y) - (wire.p1.x - p.x) * dy) / std::sqrt(dx * dx + dy * dy);
+
+    return dist < threshold;
+}
+
+
 void RenderCanvas() {
     ImGui::BeginChild("Canvas", ImVec2(0, 0), true, ImGuiWindowFlags_NoMove);
 
@@ -2249,9 +2666,41 @@ void RenderCanvas() {
         const ImVec2 mouse_pos_in_canvas = ImVec2(ImGui::GetMousePos().x - canvas_p0.x, ImGui::GetMousePos().y - canvas_p0.y);
         const ImVec2 snapped_pos = SnapToGrid(mouse_pos_in_canvas, GRID_STEP);
 
+        // --- NEW: Logic to move the selected element ---
+        if (g_isMovingElement && g_selectedIndex != -1) {
+            g_placedElements[g_selectedIndex].pos = snapped_pos;
+        }
 
         // --- Placement Logic ---
-        if (g_currentTool != NONE && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter))) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (g_currentTool == NONE) {
+                if (g_isMovingElement) {
+                    // If we were moving an element, this click places it.
+                    g_isMovingElement = false;
+                    g_selectedIndex = -1;
+                } else {
+                    // If no tool is active, try to select an element.
+                    g_selectedIndex = -1; // Deselect first
+                    for (int i = g_placedElements.size() - 1; i >= 0; --i) {
+                        const auto& elem = g_placedElements[i];
+                        ImVec2 min = ImVec2(elem.pos.x - PIN_OFFSET, elem.pos.y - 15);
+                        ImVec2 max = ImVec2(elem.pos.x + PIN_OFFSET, elem.pos.y + 15);
+                        if (elem.isVertical) {
+                            min = ImVec2(elem.pos.x - 15, elem.pos.y - PIN_OFFSET);
+                            max = ImVec2(elem.pos.x + 15, elem.pos.y + PIN_OFFSET);
+                        }
+
+                        ImVec2 rect_min_abs = ImVec2(canvas_p0.x + min.x, canvas_p0.y + min.y);
+                        ImVec2 rect_max_abs = ImVec2(canvas_p0.x + max.x, canvas_p0.y + max.y);
+                        if (ImGui::IsMouseHoveringRect(rect_min_abs, rect_max_abs)) {
+                            g_selectedIndex = i;
+                            g_isMovingElement = true;
+                            g_originalPos = elem.pos;
+                            break;
+                        }
+                    }
+                }
+            }
             if (g_currentTool == VOLTMETER) {
                 buildCircuit();
                 int closest_connector_id = -1;
@@ -2279,12 +2728,39 @@ void RenderCanvas() {
                 g_currentTool = NONE;
             } else if (g_currentTool == WIRE) {
                 if (!g_isPlacingWire) {
+                    // First click: Start the wire
                     g_isPlacingWire = true;
                     g_wireStartPos = snapped_pos;
                 } else {
-                    g_wires.push_back({g_wireStartPos, snapped_pos});
+                    // Second click: Finish the wire and check for junctions
+                    ImVec2 end_pos = snapped_pos;
+
+                    // Check if the end point lands on an existing wire
+                    int split_wire_index = -1;
+                    for (int i = 0; i < g_wires.size(); ++i) {
+                        if (IsPointOnWire(end_pos, g_wires[i])) {
+                            split_wire_index = i;
+                            break;
+                        }
+                    }
+
+                    if (split_wire_index != -1) {
+                        // We found a T-junction. Split the existing wire.
+                        Wire old_wire = g_wires[split_wire_index];
+
+                        // Remove the old, long wire
+                        g_wires.erase(g_wires.begin() + split_wire_index);
+
+                        // Add two new, shorter wires in its place
+                        g_wires.push_back({old_wire.p1, end_pos});
+                        g_wires.push_back({end_pos, old_wire.p2});
+                    }
+
+                    // Add the new wire the user just drew
+                    g_wires.push_back({g_wireStartPos, end_pos});
+
                     g_isPlacingWire = false;
-                    g_currentTool = NONE;
+                    g_currentTool = NONE; // Deselect the tool
                 }
             } else if (g_currentTool != NONE) {
                 PlacedElement new_elem{};
@@ -2350,26 +2826,26 @@ void RenderCanvas() {
             }
         }
 
+
         // --- Preview Logic ---
         if (g_currentTool != NONE) {
-            if (g_currentTool == WIRE) {
-                if (g_isPlacingWire) {
-                    ImVec2 start_abs = ImVec2(canvas_p0.x + g_wireStartPos.x, canvas_p0.y + g_wireStartPos.y);
-                    ImVec2 end_abs = ImVec2(canvas_p0.x + snapped_pos.x, canvas_p0.y + snapped_pos.y);
-                    drawList->AddLine(start_abs, end_abs, IM_COL32(0, 0, 255, 255), 1.5f);
-                }
-            } else if (g_currentTool == VOLTMETER) {
-                drawList->AddCircle(ImVec2(canvas_p0.x + snapped_pos.x, canvas_p0.y + snapped_pos.y), 15.0f, IM_COL32(23, 107, 135, 255), 0, 1.5f);
-                drawList->AddText(ImVec2(canvas_p0.x + snapped_pos.x - 4, canvas_p0.y + snapped_pos.y - 8), IM_COL32(23, 107, 135, 255), "V");
-            } else { // Component preview now includes VSIN
+            if (g_currentTool == WIRE && g_isPlacingWire) {
+                ImVec2 start_abs = ImVec2(canvas_p0.x + g_wireStartPos.x, canvas_p0.y + g_wireStartPos.y);
+                ImVec2 end_abs = ImVec2(canvas_p0.x + snapped_pos.x, canvas_p0.y + snapped_pos.y);
+                drawList->AddLine(start_abs, end_abs, IM_COL32(0, 0, 255, 255), 1.5f);
+            } else if (g_currentTool != WIRE) {
                 PlacedElement preview_element = { g_currentTool, snapped_pos, "", 0.0, g_previewIsVertical };
-                DrawComponent(drawList, preview_element, canvas_p0);
+                // FIX: Pass -1 as the index for a preview element, as it's not selected.
+                DrawComponent(drawList, preview_element, -1, canvas_p0);
             }
         }
     }
 
     // --- Drawing Placed Items ---
-    for (const auto& element : g_placedElements) DrawComponent(drawList, element, canvas_p0);
+    // FIX: This is the single, correct loop. The second one has been removed.
+    for (int i = 0; i < g_placedElements.size(); ++i) {
+        DrawComponent(drawList, g_placedElements[i], i, canvas_p0);
+    }
     for (const auto& wire : g_wires) {
         ImVec2 p1 = ImVec2(canvas_p0.x + wire.p1.x, canvas_p0.y + wire.p1.y);
         ImVec2 p2 = ImVec2(canvas_p0.x + wire.p2.x, canvas_p0.y + wire.p2.y);
@@ -2461,6 +2937,7 @@ int main() {
         RenderVDeltaPopup();
         RenderIDeltaPopup();
         RenderDependentSourcePopup();
+        RenderCursorWindow();
         RenderRunPopup();
         RenderDCResultsWindow();
         RenderTransientPlotWindow();
