@@ -44,7 +44,7 @@
 
 // ================ Global Application State ================
 // Enum to represent the currently selected tool
-enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, VOLTMETER, DIODE };
+enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE };
 ToolType g_currentTool = NONE;
 
 
@@ -133,6 +133,12 @@ char g_vacNameBuffer[64] = "V2";
 char g_vacDcOffsetText[64] = "0";
 char g_vacAmpText[64] = "1";
 char g_vacFreqText[64] = "1k";
+
+bool g_showIACPopup = false;
+char g_iacNameBuffer[64] = "I2";
+char g_iacDcOffsetText[64] = "0";
+char g_iacAmpText[64] = "1";
+char g_iacFreqText[64] = "1k";
 
 // ================ Simulation Engine and Circuit Logic ================
 // This is the core simulation engine ported from your original project.
@@ -274,9 +280,27 @@ public:
 
 class CurrentSource : public Element {
 public:
-    CurrentSource(const std::string &elemName, Node* a, Node* b, double i)
-            : Element(elemName, a, b, i) {}
+    double dcOffset;
+    double amplitude = 0;
+    double frequency = 0;
+    bool isSine = false;
+
+    CurrentSource(const std::string &elemName, Node* a, Node* b, double offset, double amp = 0, double freq = 0)
+            : Element(elemName, a, b, offset), dcOffset(offset), amplitude(amp), frequency(freq) {
+        if (amp != 0 && freq != 0) {
+            isSine = true;
+        }
+    }
+
     std::string getType() const override { return "CurrentSource"; }
+
+    void setValueAtTime(double time) {
+        if (isSine) {
+            this->value = dcOffset + amplitude * sin(2 * M_PI * frequency * time);
+        } else {
+            this->value = dcOffset;
+        }
+    }
 };
 
 
@@ -326,8 +350,6 @@ public:
         this->timeStep = (t1 - t0) / steps;
         this->totalSteps = steps;
     }
-
-    // Replace the existing simulateTransientCapture method in the Circuit class
 
     void simulateTransientCapture(WaveStore& ws, const std::vector<std::string>& wanted_nodes, const std::vector<std::string>& wanted_elements) {
         ws.clear();
@@ -392,17 +414,22 @@ public:
                     if (pi != -1) G[pi][pi] += geq;
                     if (ni != -1) G[ni][ni] += geq;
                     if (pi != -1 && ni != -1) { G[pi][ni] -= geq; G[ni][pi] -= geq; }
-
                     if (pi != -1) I[pi] += ieq;
                     if (ni != -1) I[ni] -= ieq;
                 } else if (auto ind = dynamic_cast<Inductor*>(e)) {
-                    double geq = step / ind->getValue();
+                    double geq = step / std::max(ind->getValue(), 1e-12);
                     double prevI = inductor_prev_currents.at(ind->getName());
                     if (pi != -1) G[pi][pi] += geq;
                     if (ni != -1) G[ni][ni] += geq;
                     if (pi != -1 && ni != -1) { G[pi][ni] -= geq; G[ni][pi] -= geq; }
                     if (pi != -1) I[pi] -= prevI;
                     if (ni != -1) I[ni] += prevI;
+                }
+                else if (auto cs = dynamic_cast<CurrentSource*>(e)) {
+                    cs->setValueAtTime(t); // Update to its value at the current time
+                    double I_inst = cs->getValue();
+                    if (pi != -1) I[pi] -= I_inst; // Current leaves the positive node
+                    if (ni != -1) I[ni] += I_inst; // Current enters the negative node
                 }
             }
 
@@ -474,124 +501,128 @@ public:
 
 
     bool computeDCOP(std::map<std::string, double>& outV, std::map<std::string, double>& outI) const {
-        // This is a debug version to print the matrix and diagnose the error.
+        if (groundName.empty()) throw NoGroundException();
 
-        std::cout << "\n--- Starting DC Analysis ---\n";
-        if (groundName.empty()) {
-            std::cout << "DEBUG: FAILED - No ground node set.\n";
-            throw NoGroundException();
-        }
-
+        // --- Part 1: Initial Setup for Iterative Solver ---
         std::vector<Diode*> diodes;
         for (auto elem : elements) {
             if (auto d = dynamic_cast<Diode*>(elem)) diodes.push_back(d);
         }
-
-        // --- Part 1: Setup for Modified Nodal Analysis (MNA) ---
-        std::vector<Node*> unknown_nodes;
-        for (auto node : nodes) if (node->getName() != groundName) unknown_nodes.push_back(node);
-
-        std::vector<const VoltageSource*> v_sources;
-        for (auto elem : elements) {
-            if (auto vs = dynamic_cast<const VoltageSource*>(elem)) {
-                v_sources.push_back(vs);
-            }
-        }
-
-        const int n = unknown_nodes.size();
-        const int m = v_sources.size();
-        const int matrix_size = n + m;
+        std::map<std::string, bool> diode_is_on;
+        for (auto d : diodes) diode_is_on[d->getName()] = false;
 
         outV.clear(); outI.clear();
-        if (matrix_size == 0) {
-            std::cout << "DEBUG: SUCCESS - No unknowns to solve.\n";
-            return true;
-        }
 
-        std::cout << "DEBUG: " << n << " unknown nodes, " << m << " voltage sources. Matrix size = " << matrix_size << "x" << matrix_size << std::endl;
+        // --- FIX: Variables to store the final solution state ---
+        std::vector<double> final_x;
+        int final_n = 0, final_m = 0;
+        std::vector<const Element*> final_v_sources_list;
 
-        std::map<std::string, int> node_idx;
-        std::cout << "DEBUG: Node to Index Mapping:\n";
-        for (int i = 0; i < n; ++i) {
-            node_idx[unknown_nodes[i]->getName()] = i;
-            std::cout << "  '" << unknown_nodes[i]->getName() << "' -> " << i << std::endl;
-        }
-
-        // --- Part 2: Build the MNA Matrix ---
-        std::vector<std::vector<double>> A(matrix_size, std::vector<double>(matrix_size, 0.0));
-        std::vector<double> b(matrix_size, 0.0);
-
-        // Stamping logic remains the same as the correct MNA version...
-        for (auto elem : elements) {
-            std::string name_a = elem->getNode1()->getName();
-            std::string name_c = elem->getNode2()->getName();
-            bool is_a_unknown = (name_a != groundName);
-            bool is_c_unknown = (name_c != groundName);
-            int idx_a = is_a_unknown ? node_idx.at(name_a) : -1;
-            int idx_c = is_c_unknown ? node_idx.at(name_c) : -1;
-
-            double g = 0; // Conductance for the element
-
-            if (dynamic_cast<Resistor*>(elem)) {
-                g = 1.0 / std::max(elem->getValue(), 1e-9);
-            }
-            else if (dynamic_cast<Capacitor*>(elem)) {
-                // Model as a very large resistor (near-open circuit)
-                g = 1e-12;
-            }
-            else if (dynamic_cast<Inductor*>(elem)) {
-                // Model as a very small resistor (near-short circuit)
-                g = 1e9;
-            }
-            else if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
-                double I = cs->getValue();
-                if (is_a_unknown) b[idx_a] -= I;
-                if (is_c_unknown) b[idx_c] += I;
-            }
-
-            // Stamp the conductance into the G matrix part
-            if (g != 0) {
-                if (is_a_unknown) A[idx_a][idx_a] += g;
-                if (is_c_unknown) A[idx_c][idx_c] += g;
-                if (is_a_unknown && is_c_unknown) {
-                    A[idx_a][idx_c] -= g;
-                    A[idx_c][idx_a] -= g;
+        // --- Part 2: Main Iteration Loop ---
+        const int MAX_ITERATIONS = 100;
+        for (int iter = 0; iter < MAX_ITERATIONS; ++iter) {
+            std::vector<const Element*> v_sources_and_on_diodes;
+            for (auto elem : elements) {
+                if (dynamic_cast<const VoltageSource*>(elem)) {
+                    v_sources_and_on_diodes.push_back(elem);
+                } else if (auto d = dynamic_cast<const Diode*>(elem)) {
+                    if (diode_is_on.at(d->getName())) {
+                        v_sources_and_on_diodes.push_back(d);
+                    }
                 }
             }
-        }
 
-        for (int k = 0; k < m; ++k) {
-            const auto* vs = v_sources[k];
-            std::string name_a = vs->getNode1()->getName();
-            std::string name_c = vs->getNode2()->getName();
-            double V = vs->getValue();
-            int current_idx = n + k;
-            if (name_a != groundName) { A[node_idx.at(name_a)][current_idx] += 1.0; A[current_idx][node_idx.at(name_a)] += 1.0; }
-            if (name_c != groundName) { A[node_idx.at(name_c)][current_idx] -= 1.0; A[current_idx][node_idx.at(name_c)] -= 1.0; }
-            b[current_idx] += V;
-        }
+            std::vector<Node*> unknown_nodes;
+            for (auto node : nodes) if (node->getName() != groundName) unknown_nodes.push_back(node);
 
-        // --- DEBUG: Print the final matrix and vector ---
-        std::cout << "\n--- Matrix A ---\n";
-        std::cout << std::fixed << std::setprecision(3);
-        for(int i = 0; i < matrix_size; ++i) {
-            for(int j = 0; j < matrix_size; ++j) {
-                std::cout << std::setw(10) << A[i][j] << " ";
+            const int n = unknown_nodes.size();
+            const int m = v_sources_and_on_diodes.size();
+            const int matrix_size = n + m;
+            if (matrix_size == 0) return true;
+
+            std::map<std::string, int> node_idx;
+            for (int i = 0; i < n; ++i) node_idx[unknown_nodes[i]->getName()] = i;
+
+            std::vector<std::vector<double>> A(matrix_size, std::vector<double>(matrix_size, 0.0));
+            std::vector<double> b(matrix_size, 0.0);
+
+            // --- C. Stamp Linear Elements and OFF Diodes ---
+            for (auto elem : elements) {
+                std::string name_a = elem->getNode1()->getName();
+                std::string name_c = elem->getNode2()->getName();
+                bool is_a_unknown = (name_a != groundName);
+                bool is_c_unknown = (name_c != groundName);
+                int idx_a = is_a_unknown ? node_idx.at(name_a) : -1;
+                int idx_c = is_c_unknown ? node_idx.at(name_c) : -1;
+
+                double g = 0;
+                if (dynamic_cast<Resistor*>(elem)) { g = 1.0 / std::max(elem->getValue(), 1e-9); }
+                else if (dynamic_cast<Capacitor*>(elem)) { g = 1e-12; }
+                else if (dynamic_cast<Inductor*>(elem)) { g = 1e9; }
+                else if (auto* d = dynamic_cast<Diode*>(elem)) {
+                    // --- FIX: Handle OFF diodes ---
+                    if (!diode_is_on.at(d->getName())) { g = 1e-12; } // Treat as open circuit
+                }
+                else if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
+                    double I = cs->getValue();
+                    if (is_a_unknown) b[idx_a] -= I;
+                    if (is_c_unknown) b[idx_c] += I;
+                }
+
+                if (g != 0) {
+                    if (is_a_unknown) A[idx_a][idx_a] += g;
+                    if (is_c_unknown) A[idx_c][idx_c] += g;
+                    if (is_a_unknown && is_c_unknown) {
+                        A[idx_a][idx_c] -= g;
+                        A[idx_c][idx_a] -= g;
+                    }
+                }
             }
-            std::cout << std::endl;
+
+            // --- D. Stamp Voltage Sources and ON Diodes using MNA ---
+            for (int k = 0; k < m; ++k) {
+                const auto* elem = v_sources_and_on_diodes[k];
+                std::string name_a = elem->getNode1()->getName(); // Positive terminal
+                std::string name_c = elem->getNode2()->getName();
+                double V = elem->getValue(); // Works for both VSource.value and Diode.vOn
+                int current_idx = n + k;
+
+                if (name_a != groundName) { A[node_idx.at(name_a)][current_idx] += 1.0; A[current_idx][node_idx.at(name_a)] += 1.0; }
+                if (name_c != groundName) { A[node_idx.at(name_c)][current_idx] -= 1.0; A[current_idx][node_idx.at(name_c)] -= 1.0; }
+                b[current_idx] += V;
+            }
+
+            std::vector<double> x = gaussianElimination(A, b);
+            for (auto& kv : node_idx) outV[kv.first] = x[kv.second];
+
+            // --- F. Check for Convergence ---
+            bool converged = true;
+            for (auto d : diodes) {
+                double Va = outV.count(d->getNode1()->getName()) ? outV.at(d->getNode1()->getName()) : 0.0;
+                double Vc = outV.count(d->getNode2()->getName()) ? outV.at(d->getNode2()->getName()) : 0.0;
+                bool should_be_on = (Va - Vc >= d->getValue());
+
+                if (should_be_on != diode_is_on.at(d->getName())) {
+                    converged = false;
+                    diode_is_on[d->getName()] = should_be_on;
+                }
+            }
+
+            // --- FIX: Save the state of the final successful iteration ---
+            final_x = x;
+            final_n = n;
+            final_m = m;
+            final_v_sources_list = v_sources_and_on_diodes;
+
+            if (converged && iter > 0) break;
+            if (iter == MAX_ITERATIONS - 1) throw std::runtime_error("DC solution did not converge.");
         }
-        std::cout << "\n--- Vector b ---\n";
-        for(int i = 0; i < matrix_size; ++i) {
-            std::cout << std::setw(10) << b[i] << std::endl;
+
+        // --- Part 3: Final Current Calculation ---
+        // --- FIX: Use the saved final_... variables ---
+        for (int k = 0; k < final_m; ++k) {
+            outI[final_v_sources_list[k]->getName()] = final_x[final_n + k];
         }
-        std::cout << "\n--- Calling Solver ---\n";
-
-        std::vector<double> x = gaussianElimination(A, b);
-        std::cout << "DEBUG: Solver finished.\n";
-
-        for (auto& kv : node_idx) outV[kv.first] = x[kv.second];
-
-        for (int k = 0; k < m; ++k) outI[v_sources[k]->getName()] = x[n + k];
 
         for (auto elem : elements) {
             if (outI.count(elem->getName())) continue;
@@ -599,161 +630,26 @@ public:
             double Va = (elem->getNode1()->getName() == groundName) ? 0.0 : outV.at(elem->getNode1()->getName());
             double Vc = (elem->getNode2()->getName() == groundName) ? 0.0 : outV.at(elem->getNode2()->getName());
 
-            if (auto r = dynamic_cast<Resistor*>(elem)) {
-                outI[elem->getName()] = (Va - Vc) / std::max(r->getValue(), 1e-9);
-            }
-            else if (dynamic_cast<Inductor*>(elem)) {
-                // Calculate current based on the short-circuit model: I = V / R_short = V * G_short
+            if (dynamic_cast<Resistor*>(elem)) {
+                outI[elem->getName()] = (Va - Vc) / std::max(elem->getValue(), 1e-9);
+            } else if (dynamic_cast<Inductor*>(elem)) {
+                // In DC, I = V / R_short = V * G_short
                 outI[elem->getName()] = (Va - Vc) * 1e9;
-            }
-            else if (dynamic_cast<Capacitor*>(elem)) {
+            } else if (dynamic_cast<Capacitor*>(elem)) {
                 outI[elem->getName()] = 0.0;
-            }
-            else if (auto cs = dynamic_cast<CurrentSource*>(elem)) {
-                outI[elem->getName()] = cs->getValue();
+            } else if (dynamic_cast<CurrentSource*>(elem)) {
+                outI[elem->getName()] = elem->getValue();
+            } else if (dynamic_cast<Diode*>(elem)) {
+                // This case handles diodes that were OFF in the final solution.
+                // Their current is 0. ON diodes were handled above.
+                outI[elem->getName()] = 0.0;
             } else {
                 outI[elem->getName()] = NAN;
             }
         }
-
         return true;
     }
 
-//    bool computeDCOP(std::map<std::string, double>& outV, std::map<std::string, double>& outI) const {
-//        if (groundName.empty()) throw NoGroundException();
-//
-//        std::vector<Diode*> diodes;
-//        for (auto elem : elements) {
-//            if (auto d = dynamic_cast<Diode*>(elem)) diodes.push_back(d);
-//        }
-//
-//        // Start by assuming all diodes are OFF.
-//        std::map<std::string, bool> diode_is_on;
-//        for (auto d : diodes) {
-//            diode_is_on[d->getName()] = false;
-//        }
-//
-//        outV.clear(); // Clear previous results
-//        outI.clear();
-//
-//        // --- Part 2: Main Iteration Loop ---
-//        // This loop will re-solve the circuit until the state of all diodes is stable.
-//        const int MAX_ITERATIONS = 100;
-//        for (int iter = 0; iter < MAX_ITERATIONS; ++iter) {
-//
-//            // --- A. Determine which elements are acting as voltage sources for this iteration ---
-//            // This includes actual voltage sources AND any diodes that are currently assumed to be ON.
-//            std::vector<const Element*> v_sources_and_on_diodes;
-//            for (auto elem : elements) {
-//                if (dynamic_cast<const VoltageSource*>(elem)) {
-//                    v_sources_and_on_diodes.push_back(elem);
-//                } else if (auto d = dynamic_cast<const Diode*>(elem)) {
-//                    if (diode_is_on.at(d->getName())) { // If diode is ON, treat it as a V-source
-//                        v_sources_and_on_diodes.push_back(d);
-//                    }
-//                }
-//            }
-//
-//            // --- B. Setup MNA matrix based on current assumed state ---
-//            std::vector<Node*> unknown_nodes;
-//            for (auto node : nodes) if (node->getName() != groundName) unknown_nodes.push_back(node);
-//
-//            const int n = unknown_nodes.size();
-//            const int m = v_sources_and_on_diodes.size();
-//            const int matrix_size = n + m;
-//            if (matrix_size == 0) return true;
-//
-//            std::map<std::string, int> node_idx;
-//            for (int i = 0; i < n; ++i) node_idx[unknown_nodes[i]->getName()] = i;
-//
-//            std::vector<std::vector<double>> A(matrix_size, std::vector<double>(matrix_size, 0.0));
-//            std::vector<double> b(matrix_size, 0.0);
-//
-//            // --- C. Stamp Linear Elements and OFF Diodes ---
-//            for (auto elem : elements) {
-//                std::string name_a = elem->getNode1()->getName();
-//                std::string name_c = elem->getNode2()->getName();
-//                bool is_a_unknown = (name_a != groundName);
-//                bool is_c_unknown = (name_c != groundName);
-//                int idx_a = is_a_unknown ? node_idx.at(name_a) : -1;
-//                int idx_c = is_c_unknown ? node_idx.at(name_c) : -1;
-//
-//                double g = 0; // Conductance for the element
-//
-//                if (dynamic_cast<Resistor*>(elem)) {
-//                    g = 1.0 / std::max(elem->getValue(), 1e-9);
-//                }
-//                else if (dynamic_cast<Capacitor*>(elem)) {
-//                    // Model as a very large resistor (near-open circuit)
-//                    g = 1e-12;
-//                }
-//                else if (dynamic_cast<Inductor*>(elem)) {
-//                    // Model as a very small resistor (near-short circuit)
-//                    g = 1e9;
-//                }
-//                else if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
-//                    double I = cs->getValue();
-//                    if (is_a_unknown) b[idx_a] -= I;
-//                    if (is_c_unknown) b[idx_c] += I;
-//                }
-//
-//                // Stamp the conductance into the G matrix part
-//                if (g != 0) {
-//                    if (is_a_unknown) A[idx_a][idx_a] += g;
-//                    if (is_c_unknown) A[idx_c][idx_c] += g;
-//                    if (is_a_unknown && is_c_unknown) {
-//                        A[idx_a][idx_c] -= g;
-//                        A[idx_c][idx_a] -= g;
-//                    }
-//                }
-//            }
-//
-//            // --- D. Stamp Voltage Sources and ON Diodes using MNA ---
-//            for (int k = 0; k < m; ++k) {
-//                const auto* elem = v_sources_and_on_diodes[k];
-//                std::string name_a = elem->getNode1()->getName(); // Positive terminal
-//                std::string name_c = elem->getNode2()->getName();
-//                double V = elem->getValue(); // Works for both VSource.value and Diode.vOn
-//                int current_idx = n + k;
-//
-//                if (name_a != groundName) { A[node_idx.at(name_a)][current_idx] += 1.0; A[current_idx][node_idx.at(name_a)] += 1.0; }
-//                if (name_c != groundName) { A[node_idx.at(name_c)][current_idx] -= 1.0; A[current_idx][node_idx.at(name_c)] -= 1.0; }
-//                b[current_idx] += V;
-//            }
-//
-//            // --- E. Solve the system for this iteration ---
-//            std::vector<double> x = gaussianElimination(A, b);
-//            for (auto& kv : node_idx) outV[kv.first] = x[kv.second];
-//
-//            // --- F. Check for Convergence ---
-//            // Check if any diode needs to change state based on the new voltages.
-//            bool converged = true;
-//            for (auto d : diodes) {
-//                double Va = (d->getNode1()->getName() == groundName) ? 0.0 : outV.at(d->getNode1()->getName());
-//                double Vc = (d->getNode2()->getName() == groundName) ? 0.0 : outV.at(d->getNode2()->getName());
-//                bool should_be_on = (Va - Vc >= d->getValue());
-//
-//                if (should_be_on != diode_is_on.at(d->getName())) {
-//                    converged = false;
-//                    diode_is_on[d->getName()] = should_be_on; // Update state for the next iteration
-//                }
-//            }
-//
-//            if (converged && iter > 0) {
-//                break; // If no diodes changed state, the solution is stable.
-//            }
-//
-//            if (iter == MAX_ITERATIONS - 1) {
-//                // If we didn't converge after many tries, throw an error.
-//                throw std::runtime_error("DC solution did not converge (check for oscillations).");
-//            }
-//        }
-//
-//        // --- Part 3: Final Current Calculation ---
-//        // (This part is unchanged from our previous fix)
-//        // ...
-//        return true;
-//    }
 
 };
 
@@ -810,10 +706,23 @@ bool solveACAtFrequency(const Circuit& C, double freq, std::map<std::string, cd>
         int idx_c = (name_c != C.groundName) ? node_idx.at(name_c) : -1;
 
         cd y = {0,0}; // Admittance
-        if (auto r = dynamic_cast<Resistor*>(e)) y = 1.0 / std::max(r->getValue(), 1e-9);
-        else if (auto c = dynamic_cast<Capacitor*>(e)) y = j * w * c->getValue();
-        else if (auto l = dynamic_cast<Inductor*>(e)) y = 1.0 / (j * w * std::max(l->getValue(), 1e-12));
+        if (auto r = dynamic_cast<Resistor*>(e)) {
+            y = 1.0 / std::max(r->getValue(), 1e-9);
+        }
+        else if (auto c = dynamic_cast<Capacitor*>(e)) {
+            y = j * w * c->getValue();
+        }
+        else if (auto l = dynamic_cast<Inductor*>(e)) {
+            y = 1.0 / (j * w * std::max(l->getValue(), 1e-12));
+        }
+        else if (auto cs = dynamic_cast<CurrentSource*>(e)) {
+            // For AC, stamp the source's amplitude into the RHS 'b' vector
+            double I_amp = cs->amplitude;
+            if (idx_a != -1) b[idx_a] -= I_amp; // Current leaves the positive node
+            if (idx_c != -1) b[idx_c] += I_amp; // Current enters the negative node
+        }
 
+        // Stamp the admittance (if any) into the A matrix
         if (y.real() != 0 || y.imag() != 0) {
             if (idx_a != -1) A[idx_a][idx_a] += y;
             if (idx_c != -1) A[idx_c][idx_c] += y;
@@ -988,6 +897,7 @@ void buildCircuit() {
             case CSOURCE: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value)); break;
             case DIODE: g_circuit.addElement(new Diode(e.name, n1, n2, e.value)); break;
             case VSIN: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
+            case CSIN: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
 
             default: break;
         }
@@ -1089,6 +999,9 @@ void RenderToolbar() {
     if (ImGui::Button("I")) { request_component_popup(CSOURCE); } ImGui::SameLine();
     if (ImGui::Button("D")) { request_component_popup(DIODE); } ImGui::SameLine();
     if (ImGui::Button("GND")) { g_currentTool = GROUND; } ImGui::SameLine();
+    if (ImGui::Button("VAC")) { g_showVACPopup = true; } ImGui::SameLine();
+    if (ImGui::Button("IAC")) { g_showIACPopup = true; } ImGui::SameLine();
+    if (ImGui::Button("VM")) { g_currentTool = VOLTMETER; } ImGui::SameLine();
 
     if (ImGui::Button("Wire")) {
         g_currentTool = WIRE;
@@ -1096,9 +1009,7 @@ void RenderToolbar() {
     }
     ImGui::SameLine();
 
-    if (ImGui::Button("VAC")) { g_showVACPopup = true; } ImGui::SameLine();
 
-    if (ImGui::Button("VM")) { g_currentTool = VOLTMETER; } ImGui::SameLine();
 
     ImGui::EndChild();
 }
@@ -1408,6 +1319,33 @@ void RenderVACPopup() {
 }
 
 
+void RenderIACPopup() {
+    if (g_showIACPopup) {
+        ImGui::OpenPopup("AC Current Source");
+        g_showIACPopup = false;
+    }
+
+    // ... (This function is identical to RenderVACPopup, just with different labels and titles)
+    // You can copy RenderVACPopup and change the title, labels, and buffers to g_iac...
+    if (ImGui::BeginPopupModal("AC Current Source", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("AC Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_iacNameBuffer, 64);
+        ImGui::InputText("DC Offset (A)", g_iacDcOffsetText, 64);
+        ImGui::InputText("Amplitude (A)", g_iacAmpText, 64);
+        ImGui::InputText("Frequency (Hz)", g_iacFreqText, 64);
+
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            g_currentTool = CSIN; // Arm the CSIN tool
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+}
+
+
 // ========================================================================================================
 // Helper function to format a number with SI prefixes (k, M, m, u, n)
 std::string formatValueWithSI(double value) {
@@ -1577,6 +1515,16 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImV
             break;
         }
 
+        case CSIN: {
+            drawList->AddCircle(pos, 15.0f, color, 0, thickness);
+//            if (element.isVertical) { /* ... */ } else { /* ... */ }
+//            // Add a small sine wave to distinguish it
+            drawList->PathLineTo(ImVec2(pos.x - 7, pos.y - 7));
+            drawList->PathBezierCubicCurveTo(ImVec2(pos.x - 3, pos.y - 11), ImVec2(pos.x + 3, pos.y - 3), ImVec2(pos.x + 7, pos.y - 7), 10);
+            drawList->PathStroke(color, ImDrawFlags_None, thickness);
+            break;
+        }
+
         case GROUND: {
             drawList->AddLine(pos, ImVec2(pos.x, pos.y + 10), color, thickness);
             drawList->AddLine(ImVec2(pos.x - 10, pos.y + 10), ImVec2(pos.x + 10, pos.y + 10), color, thickness);
@@ -1601,6 +1549,12 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, const ImV
             std::string freq_str = formatValueWithSI(element.freq);
 
             // Combine the pre-formatted strings
+            snprintf(display_str, 128, "SINE(%s %s %s)", offset_str.c_str(), amp_str.c_str(), freq_str.c_str());
+        } else if (element.type == CSIN) {
+            // Special formatting for AC Current Sources
+            std::string offset_str = formatValueWithSI(element.value);
+            std::string amp_str = formatValueWithSI(element.amp);
+            std::string freq_str = formatValueWithSI(element.freq);
             snprintf(display_str, 128, "SINE(%s %s %s)", offset_str.c_str(), amp_str.c_str(), freq_str.c_str());
         } else {
             // Regular formatting for all other components
@@ -1787,6 +1741,11 @@ void RenderCanvas() {
                     value = parseNumber(g_vacDcOffsetText); // DC offset goes into the main 'value' field
                     amp = parseNumber(g_vacAmpText);
                     freq = parseNumber(g_vacFreqText);
+                } else if (g_currentTool == CSIN) { // <<< ADD THIS BLOCK
+                    name = g_iacNameBuffer;
+                    value = parseNumber(g_iacDcOffsetText);
+                    amp = parseNumber(g_iacAmpText);
+                    freq = parseNumber(g_iacFreqText);
                 } else {
                     // Otherwise, use the regular component dialog buffers
                     name = g_componentNameBuffer;
@@ -1911,6 +1870,7 @@ int main() {
         RenderToolbar();
         RenderComponentPopup();
         RenderVACPopup();
+        RenderIACPopup();
         RenderRunPopup();
         RenderDCResultsWindow();
         RenderTransientPlotWindow();
