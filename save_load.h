@@ -95,6 +95,31 @@ struct ProjectSettings {
     }
 };
 
+
+// --- NEW: Definition for a single savable subcircuit ---
+struct SubcircuitDefinition {
+    std::string name;
+    std::vector<SNode>    Snodes;
+    std::vector<SElement> Selements;
+    std::vector<SWire>    Swires;
+    std::string port1_node_name;
+    std::string port2_node_name;
+
+    template<class Ar> void serialize(Ar& ar) {
+        ar(CEREAL_NVP(name), CEREAL_NVP(Snodes), CEREAL_NVP(Selements), CEREAL_NVP(Swires),
+           CEREAL_NVP(port1_node_name), CEREAL_NVP(port2_node_name));
+    }
+};
+
+// --- NEW: A struct to hold the entire library for saving ---
+struct SubcircuitLibraryStore {
+    std::vector<SubcircuitDefinition> library;
+    template<class Ar> void serialize(Ar& ar) {
+        ar(CEREAL_NVP(library));
+    }
+};
+
+
 struct SCircuit {
     int file_version{1};
     std::vector<SNode>    Snodes;

@@ -1,3 +1,8 @@
+// ===========================================
+//========== ماییم و نوای بی نوایی ==========
+// ========== بسم الله اگرحریف مایی ==========
+// ===========================================
+
 // ----------------- STANDARD LIBRARIES -----------------
 #include <iostream>
 #include <vector>
@@ -47,7 +52,7 @@
 
 // ================ Global Application State ================
 // Enum to represent the currently selected tool
-enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE, VPULSE, IPULSE, VDELTA, IDELTA, VCVS, VCCS };
+enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE, VSIN, CSIN, VOLTMETER, DIODE, VPULSE, IPULSE, VDELTA, IDELTA, VCVS, VCCS, VPHASE, SUBCIRCUIT_TOOL, SUBCIRCUIT_INSTANCE };
 ToolType g_currentTool = NONE;
 
 
@@ -57,6 +62,9 @@ struct PlacedProbe {
     double measured_voltage;
 };
 std::vector<PlacedProbe> g_probes;
+
+
+std::vector<SubcircuitDefinition> g_subcircuitLibrary;
 
 
 // Struct to hold information about a placed graphical element
@@ -92,6 +100,10 @@ struct PlacedElement {
     double gain = 1.0;
     char ctrlNodeP_name[64] = "";
     char ctrlNodeN_name[64] = "";
+    int subcircuit_def_idx = -1;
+    ImVec2 size = {0,0};
+
+    double phase = 0.0;
 };
 std::vector<PlacedElement> g_placedElements;
 
@@ -111,7 +123,7 @@ ImVec2 g_wireStartPos;
 
 // --- State for the Run Simulation Dialog ---
 bool g_showRunPopup = false;
-enum RunChoice { RUN_DC, RUN_AC, RUN_VT, RUN_IT };
+enum RunChoice { RUN_DC, RUN_AC, RUN_VT, RUN_IT, RUN_PHASE };
 RunChoice g_runChoice = RUN_DC;
 
 // Buffers for text inputs in the Run dialog
@@ -235,6 +247,28 @@ int g_cursor2_series_idx = -1;
 
 std::string g_currentFilePath;
 
+int g_subcircuitSelectionStep = 0; // 0=none, 1=first port selected
+std::string g_subcircuitNode1_name, g_subcircuitNode2_name;
+ImVec2 g_subcircuitNode1_pos, g_subcircuitNode2_pos;
+char g_subcircuitNameBuffer[64] = "MySub";
+int g_placingSubcircuit_idx = -1;
+
+bool g_showVPhasePopup = false;
+char g_vphaseNameBuffer[64] = "Vp1";
+char g_vphaseAmpBuffer[64] = "1";
+char g_vphaseFreqBuffer[64] = "1k";
+char g_vphasePhaseBuffer[64] = "0";
+
+bool g_showPhasePlot = false;
+char g_phaseBaseFreqText[64] = "1k";
+char g_phaseStartText[64] = "0";
+char g_phaseStopText[64] = "360"; // Degrees are more intuitive for UI
+char g_phaseNumStepsText[64] = "100";
+char g_phaseProbeText[64] = "n1";
+std::vector<double> g_phase_angles; // In degrees
+std::vector<double> g_phase_mags;
+std::string g_phase_probe_node;
+
 // ================ Simulation Engine and Circuit Logic ================
 // This is the core simulation engine ported from your original project.
 
@@ -354,6 +388,7 @@ public:
     double dcOffset = 0.0;
     double amplitude = 0.0;
     double frequency = 0.0;
+    double phase = 0.0;
 
     // PULSE parameters
     double v_initial = 0.0;
@@ -379,8 +414,9 @@ public:
         sourceType = Type::DC;
         dcOffset = val;
     }
-    VoltageSource(const std::string &elemName, Node* n1, Node* n2, double offset, double amp, double freq)
-            : Element(elemName, n1, n2, offset), dcOffset(offset), amplitude(amp), frequency(freq) {
+
+    VoltageSource(const std::string &elemName, Node* n1, Node* n2, double offset, double amp, double freq, double ph = 0.0)
+            : Element(elemName, n1, n2, offset), dcOffset(offset), amplitude(amp), frequency(freq), phase(ph) {
         sourceType = Type::SINE;
     }
 
@@ -887,6 +923,48 @@ public:
 Circuit g_circuit; // A global circuit object for the simulation
 
 
+// Returns the standard path for the library file
+std::string subcircuit_library_path() {
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata && *appdata) {
+        return std::string(appdata) + "\\Opulator\\library.json";
+    }
+#endif
+    return "library.json"; // Fallback
+}
+
+// Saves the current in-memory library to the file
+void SaveSubcircuitLibrary() {
+    std::string path = subcircuit_library_path();
+    ensure_directory_exists(path); // From recent_files.h
+
+    SubcircuitLibraryStore store;
+    store.library = g_subcircuitLibrary; // Copy from our global variable
+
+    std::ofstream os(path);
+    if (!os) return;
+    cereal::JSONOutputArchive ar(os);
+    ar(cereal::make_nvp("subcircuit_library", store));
+}
+
+// Loads the library from the file into memory
+void LoadSubcircuitLibrary() {
+    std::string path = subcircuit_library_path();
+    std::ifstream is(path);
+    if (!is) return; // File doesn't exist yet, that's fine
+
+    try {
+        cereal::JSONInputArchive ar(is);
+        SubcircuitLibraryStore store;
+        ar(cereal::make_nvp("subcircuit_library", store));
+        g_subcircuitLibrary = store.library; // Load into our global variable
+    } catch (const std::exception& e) {
+        std::cerr << "Error loading subcircuit library: " << e.what() << std::endl;
+    }
+}
+
+
 std::vector<double> logspace(double start, double stop, int num_points) {
     if (start <= 0 || stop <= 0 || stop < start || num_points < 2) {
         return {};
@@ -971,7 +1049,7 @@ bool solveACAtFrequency(const Circuit& C, double freq, std::map<std::string, cd>
         if (idx_c != -1) { A[idx_c][current_idx] -= 1.0; A[current_idx][idx_c] -= 1.0; }
 
         // For AC, we use the sine amplitude, not the DC offset
-        b[current_idx] = vs->amplitude;
+        b[current_idx] = std::polar(vs->amplitude, vs->phase);
     }
 
     // Simple complex solver using Gaussian elimination
@@ -1020,7 +1098,8 @@ int addConnector(ImVec2 pos) {
 }
 
 
-void buildCircuit() {
+
+void buildCircuit(bool require_ground = true) {
     // 1. Reset everything for a fresh build
     g_circuit.reset();
     g_allConnectors.clear();
@@ -1079,7 +1158,7 @@ void buildCircuit() {
         }
     }
 
-    if (ground_root_id == -1) {
+    if (require_ground && ground_root_id == -1) {
         throw NoGroundException();
     }
 
@@ -1098,94 +1177,277 @@ void buildCircuit() {
         g_connectorToNodeName[c.id] = root_to_name[root];
     }
 
+//    // 6. Build the logical circuit object
+//    g_circuit.setGroundNode("0");
+//    for (const auto& pair : root_to_name) {
+//        g_circuit.getOrCreateNode(pair.second);
+//    }
+//
+//    for (const auto& e : g_placedElements) {
+//        if (e.type == GROUND || e.type == WIRE || e.type == VOLTMETER) continue;
+//
+//        int id1, id2;
+//        if (e.isVertical) {
+//            id1 = addConnector(ImVec2(e.pos.x, e.pos.y - PIN_OFFSET));
+//            id2 = addConnector(ImVec2(e.pos.x, e.pos.y + PIN_OFFSET));
+//        } else {
+//            id1 = addConnector(ImVec2(e.pos.x - PIN_OFFSET, e.pos.y));
+//            id2 = addConnector(ImVec2(e.pos.x + PIN_OFFSET, e.pos.y));
+//        }
+//
+//        Node* n1 = g_circuit.getOrCreateNode(g_connectorToNodeName.at(id1));
+//        Node* n2 = g_circuit.getOrCreateNode(g_connectorToNodeName.at(id2));
+//
+//        switch (e.type) {
+//            case RESISTOR: g_circuit.addElement(new Resistor(e.name, n1, n2, e.value)); break;
+//            case CAPACITOR: g_circuit.addElement(new Capacitor(e.name, n1, n2, e.value)); break;
+//            case INDUCTOR: g_circuit.addElement(new Inductor(e.name, n1, n2, e.value)); break;
+//            case VSOURCE: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value)); break;
+//            case CSOURCE: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value)); break;
+//            case DIODE: g_circuit.addElement(new Diode(e.name, n1, n2, e.value)); break;
+//            case VSIN: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
+//            case CSIN: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
+//            case VPULSE: {
+//                auto vs = new VoltageSource(e.name, n1, n2, 0.0); // Create a base VSource
+//                vs->sourceType = VoltageSource::Type::PULSE;
+//                // Copy all the pulse parameters from the PlacedElement to the simulation object
+//                vs->v_initial = e.v_initial;
+//                vs->v_on = e.v_on;
+//                vs->t_delay = e.t_delay;
+//                vs->t_rise = e.t_rise;
+//                vs->t_fall = e.t_fall;
+//                vs->t_on = e.t_on;
+//                vs->t_period = e.t_period;
+//                g_circuit.addElement(vs);
+//                break;
+//            }
+//            case IPULSE: {
+//                auto cs = new CurrentSource(e.name, n1, n2, e.i_initial);
+//                cs->sourceType = CurrentSource::Type::PULSE;
+//                cs->i_initial = e.i_initial;
+//                cs->i_on      = e.i_on;
+//                cs->t_delay   = e.t_delay;
+//                cs->t_rise    = e.t_rise;
+//                cs->t_fall    = e.t_fall;
+//                cs->t_on      = e.t_on;
+//                cs->t_period  = e.t_period;
+//                g_circuit.addElement(cs);
+//                break;
+//            }
+//            case VDELTA: {
+//                auto vs = new VoltageSource(e.name, n1, n2, 0.0); // DC value is 0
+//                vs->sourceType = VoltageSource::Type::DELTA;
+//                vs->t_pulse = e.t_pulse;
+//                vs->area = e.area;
+//                g_circuit.addElement(vs);
+//                break;
+//            }
+//            case VCVS: {
+//                auto vs = new VoltageSource(e.name, n1, n2, 0.0);
+//                vs->sourceType = VoltageSource::Type::VCVS;
+//                vs->gain = e.gain;
+//                vs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
+//                vs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
+//                g_circuit.addElement(vs);
+//                break;
+//            }
+//            case VCCS: {
+//                auto cs = new CurrentSource(e.name, n1, n2, 0.0);
+//                cs->sourceType = CurrentSource::Type::VCCS;
+//                cs->gain = e.gain;
+//                cs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
+//                cs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
+//                g_circuit.addElement(cs);
+//                break;
+//            }
+//            default: break;
+//        }
+//    }
+//
+//    // Add wires as ideal resistors
+//    for (const auto& w : g_wires) {
+//        int id1 = addConnector(w.p1);
+//        int id2 = addConnector(w.p2);
+//        std::string name1 = g_connectorToNodeName.at(id1);
+//        std::string name2 = g_connectorToNodeName.at(id2);
+//        if (name1 != name2) {
+//            Node* n1 = g_circuit.getOrCreateNode(name1);
+//            Node* n2 = g_circuit.getOrCreateNode(name2);
+//            g_circuit.addElement(new Resistor("W", n1, n2, 1e-9));
+//        }
+//    }
+
     // 6. Build the logical circuit object
     g_circuit.setGroundNode("0");
     for (const auto& pair : root_to_name) {
         g_circuit.getOrCreateNode(pair.second);
     }
 
+    // 7. Add all top-level elements and EXPAND subcircuits
     for (const auto& e : g_placedElements) {
         if (e.type == GROUND || e.type == WIRE || e.type == VOLTMETER) continue;
 
-        int id1, id2;
-        if (e.isVertical) {
-            id1 = addConnector(ImVec2(e.pos.x, e.pos.y - PIN_OFFSET));
-            id2 = addConnector(ImVec2(e.pos.x, e.pos.y + PIN_OFFSET));
-        } else {
-            id1 = addConnector(ImVec2(e.pos.x - PIN_OFFSET, e.pos.y));
-            id2 = addConnector(ImVec2(e.pos.x + PIN_OFFSET, e.pos.y));
+        // Find the main nodes the element is connected to on the canvas
+        Node* n1 = nullptr;
+        Node* n2 = nullptr;
+        if (e.type != GROUND) {
+            ImVec2 p1_pos = e.isVertical ? ImVec2(e.pos.x, e.pos.y - PIN_OFFSET) : ImVec2(e.pos.x - PIN_OFFSET, e.pos.y);
+            ImVec2 p2_pos = e.isVertical ? ImVec2(e.pos.x, e.pos.y + PIN_OFFSET) : ImVec2(e.pos.x + PIN_OFFSET, e.pos.y);
+            n1 = g_circuit.getOrCreateNode(g_connectorToNodeName.at(addConnector(p1_pos)));
+            n2 = g_circuit.getOrCreateNode(g_connectorToNodeName.at(addConnector(p2_pos)));
         }
 
-        Node* n1 = g_circuit.getOrCreateNode(g_connectorToNodeName.at(id1));
-        Node* n2 = g_circuit.getOrCreateNode(g_connectorToNodeName.at(id2));
+        if (e.type == SUBCIRCUIT_INSTANCE) {
+            // --- THIS IS THE NEW EXPANSION LOGIC ---
+            const SubcircuitDefinition& def = g_subcircuitLibrary.at(e.subcircuit_def_idx);
+            std::map<int, Node*> internal_node_map; // Map internal subcircuit node IDs to main circuit Node*
 
-        switch (e.type) {
-            case RESISTOR: g_circuit.addElement(new Resistor(e.name, n1, n2, e.value)); break;
-            case CAPACITOR: g_circuit.addElement(new Capacitor(e.name, n1, n2, e.value)); break;
-            case INDUCTOR: g_circuit.addElement(new Inductor(e.name, n1, n2, e.value)); break;
-            case VSOURCE: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value)); break;
-            case CSOURCE: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value)); break;
-            case DIODE: g_circuit.addElement(new Diode(e.name, n1, n2, e.value)); break;
-            case VSIN: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
-            case CSIN: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
-            case VPULSE: {
-                auto vs = new VoltageSource(e.name, n1, n2, 0.0); // Create a base VSource
-                vs->sourceType = VoltageSource::Type::PULSE;
-                // Copy all the pulse parameters from the PlacedElement to the simulation object
-                vs->v_initial = e.v_initial;
-                vs->v_on = e.v_on;
-                vs->t_delay = e.t_delay;
-                vs->t_rise = e.t_rise;
-                vs->t_fall = e.t_fall;
-                vs->t_on = e.t_on;
-                vs->t_period = e.t_period;
-                g_circuit.addElement(vs);
-                break;
+            // A. Find the internal integer IDs for the named ports
+            int port1_id = -1, port2_id = -1;
+            for (const auto& snode : def.Snodes) {
+                if (snode.name == def.port1_node_name) port1_id = snode.id;
+                if (snode.name == def.port2_node_name) port2_id = snode.id;
             }
-            case IPULSE: {
-                auto cs = new CurrentSource(e.name, n1, n2, e.i_initial);
-                cs->sourceType = CurrentSource::Type::PULSE;
-                cs->i_initial = e.i_initial;
-                cs->i_on      = e.i_on;
-                cs->t_delay   = e.t_delay;
-                cs->t_rise    = e.t_rise;
-                cs->t_fall    = e.t_fall;
-                cs->t_on      = e.t_on;
-                cs->t_period  = e.t_period;
-                g_circuit.addElement(cs);
-                break;
+
+            // B. Map the external ports to the main circuit nodes
+            if (port1_id != -1) internal_node_map[port1_id] = n1;
+            if (port2_id != -1) internal_node_map[port2_id] = n2;
+
+            // C. Instantiate the subcircuit's internal elements
+            for (const auto& sub_elem : def.Selements) {
+                Node *sub_n1 = nullptr, *sub_n2 = nullptr;
+
+                // Remap the first pin's node
+                if (internal_node_map.count(sub_elem.n1)) {
+                    sub_n1 = internal_node_map.at(sub_elem.n1);
+                } else {
+                    std::string new_node_name = e.name + "." + def.Snodes.at(sub_elem.n1).name;
+                    sub_n1 = g_circuit.getOrCreateNode(new_node_name);
+                    internal_node_map[sub_elem.n1] = sub_n1;
+                }
+                // Remap the second pin's node
+                if (internal_node_map.count(sub_elem.n2)) {
+                    sub_n2 = internal_node_map.at(sub_elem.n2);
+                } else {
+                    std::string new_node_name = e.name + "." + def.Snodes.at(sub_elem.n2).name;
+                    sub_n2 = g_circuit.getOrCreateNode(new_node_name);
+                    internal_node_map[sub_elem.n2] = sub_n2;
+                }
+
+                // Create a new instance of the internal element with a unique name
+                std::string new_elem_name = e.name + "." + sub_elem.name;
+
+                // --- THIS IS THE NEW, COMPLETE SWITCH STATEMENT ---
+                if (sub_elem.kind == "R") {
+                    g_circuit.addElement(new Resistor(new_elem_name, sub_n1, sub_n2, sub_elem.value));
+                } else if (sub_elem.kind == "C") {
+                    g_circuit.addElement(new Capacitor(new_elem_name, sub_n1, sub_n2, sub_elem.value));
+                } else if (sub_elem.kind == "L") {
+                    g_circuit.addElement(new Inductor(new_elem_name, sub_n1, sub_n2, sub_elem.value));
+                } else if (sub_elem.kind == "D") {
+                    g_circuit.addElement(new Diode(new_elem_name, sub_n1, sub_n2, sub_elem.value));
+                }
+                    // Handle complex sources inside the subcircuit
+                else if (sub_elem.kind == "V") {
+                    auto vs = new VoltageSource(new_elem_name, sub_n1, sub_n2, sub_elem.value);
+                    if (sub_elem.sourceType == "SINE") {
+                        vs->sourceType = VoltageSource::Type::SINE;
+                        vs->amplitude = sub_elem.amp;
+                        vs->frequency = sub_elem.freq;
+                    } // ... Add cases for PULSE, DELTA, VCVS ...
+                    g_circuit.addElement(vs);
+                } else if (sub_elem.kind == "I") {
+                    auto cs = new CurrentSource(new_elem_name, sub_n1, sub_n2, sub_elem.value);
+                    if (sub_elem.sourceType == "SINE") {
+                        cs->sourceType = CurrentSource::Type::SINE;
+                        cs->amplitude = sub_elem.amp;
+                        cs->frequency = sub_elem.freq;
+                    } // ... Add cases for PULSE, DELTA, VCCS ...
+                    g_circuit.addElement(cs);
+                }
             }
-            case VDELTA: {
-                auto vs = new VoltageSource(e.name, n1, n2, 0.0); // DC value is 0
-                vs->sourceType = VoltageSource::Type::DELTA;
-                vs->t_pulse = e.t_pulse;
-                vs->area = e.area;
-                g_circuit.addElement(vs);
-                break;
+
+        } else {
+            // --- This is the existing logic for all other primitive components ---
+            switch (e.type) {
+                case RESISTOR: g_circuit.addElement(new Resistor(e.name, n1, n2, e.value)); break;
+                case CAPACITOR: g_circuit.addElement(new Capacitor(e.name, n1, n2, e.value)); break;
+                case INDUCTOR: g_circuit.addElement(new Inductor(e.name, n1, n2, e.value)); break;
+                case VSOURCE: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value)); break;
+                case CSOURCE: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value)); break;
+                case DIODE: g_circuit.addElement(new Diode(e.name, n1, n2, e.value)); break;
+                case VSIN: g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
+                case CSIN: g_circuit.addElement(new CurrentSource(e.name, n1, n2, e.value, e.amp, e.freq)); break;
+                case VPULSE: {
+                    auto vs = new VoltageSource(e.name, n1, n2, 0.0); // Create a base VSource
+                    vs->sourceType = VoltageSource::Type::PULSE;
+                    // Copy all the pulse parameters from the PlacedElement to the simulation object
+                    vs->v_initial = e.v_initial;
+                    vs->v_on = e.v_on;
+                    vs->t_delay = e.t_delay;
+                    vs->t_rise = e.t_rise;
+                    vs->t_fall = e.t_fall;
+                    vs->t_on = e.t_on;
+                    vs->t_period = e.t_period;
+                    g_circuit.addElement(vs);
+                    break;
+                }
+                case IPULSE: {
+                    auto cs = new CurrentSource(e.name, n1, n2, e.i_initial);
+                    cs->sourceType = CurrentSource::Type::PULSE;
+                    cs->i_initial = e.i_initial;
+                    cs->i_on      = e.i_on;
+                    cs->t_delay   = e.t_delay;
+                    cs->t_rise    = e.t_rise;
+                    cs->t_fall    = e.t_fall;
+                    cs->t_on      = e.t_on;
+                    cs->t_period  = e.t_period;
+                    g_circuit.addElement(cs);
+                    break;
+                }
+                case VDELTA: {
+                    auto vs = new VoltageSource(e.name, n1, n2, 0.0); // DC value is 0
+                    vs->sourceType = VoltageSource::Type::DELTA;
+                    vs->t_pulse = e.t_pulse;
+                    vs->area = e.area;
+                    g_circuit.addElement(vs);
+                    break;
+                }
+                case IDELTA: {
+                    auto cs = new CurrentSource(e.name, n1, n2, 0.0); // Create a CurrentSource, not a VoltageSource
+                    cs->sourceType = CurrentSource::Type::DELTA; // Use the CurrentSource's enum
+                    cs->t_pulse = e.t_pulse;
+                    cs->area = e.area;
+                    g_circuit.addElement(cs); // Add the correct 'cs' object
+                    break;
+                }
+                case VPHASE: // VPHASE is a type of SINE source with phase
+                    g_circuit.addElement(new VoltageSource(e.name, n1, n2, e.value, e.amp, e.freq, e.phase));
+                    break;
+                case VCVS: {
+                    auto vs = new VoltageSource(e.name, n1, n2, 0.0);
+                    vs->sourceType = VoltageSource::Type::VCVS;
+                    vs->gain = e.gain;
+                    vs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
+                    vs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
+                    g_circuit.addElement(vs);
+                    break;
+                }
+                case VCCS: {
+                    auto cs = new CurrentSource(e.name, n1, n2, 0.0);
+                    cs->sourceType = CurrentSource::Type::VCCS;
+                    cs->gain = e.gain;
+                    cs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
+                    cs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
+                    g_circuit.addElement(cs);
+                    break;
+                }
+                default: break;
             }
-            case VCVS: {
-                auto vs = new VoltageSource(e.name, n1, n2, 0.0);
-                vs->sourceType = VoltageSource::Type::VCVS;
-                vs->gain = e.gain;
-                vs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
-                vs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
-                g_circuit.addElement(vs);
-                break;
-            }
-            case VCCS: {
-                auto cs = new CurrentSource(e.name, n1, n2, 0.0);
-                cs->sourceType = CurrentSource::Type::VCCS;
-                cs->gain = e.gain;
-                cs->ctrlNodeP = g_circuit.getOrCreateNode(e.ctrlNodeP_name);
-                cs->ctrlNodeN = g_circuit.getOrCreateNode(e.ctrlNodeN_name);
-                g_circuit.addElement(cs);
-                break;
-            }
-            default: break;
         }
     }
 
-    // Add wires as ideal resistors
+    // 8. Add top-level wires (unchanged)
     for (const auto& w : g_wires) {
         int id1 = addConnector(w.p1);
         int id2 = addConnector(w.p2);
@@ -1474,6 +1736,7 @@ std::vector<std::string> splitList(const std::string& s) {
 }
 
 
+void RenderSubcircuitMenu();
 
 // ================ UI Rendering Functions ================
 void DoSaveAs() {
@@ -1560,6 +1823,7 @@ void RenderMenuBar() {
             ImGui::EndMenu();
         }
 
+        RenderSubcircuitMenu();
         ImGui::EndMainMenuBar();
     }
 }
@@ -1589,6 +1853,7 @@ void RenderToolbar() {
     if (ImGui::Button("IPULSE")) { g_showIPulsePopup = true; } ImGui::SameLine();
     if (ImGui::Button("VDelta")) { g_showVDeltaPopup = true; } ImGui::SameLine();
     if (ImGui::Button("IDelta")) { g_showIDeltaPopup = true; } ImGui::SameLine();
+    if (ImGui::Button("VPhase")) { g_showVPhasePopup = true; } ImGui::SameLine();
     if (ImGui::Button("VCVS")) {
         g_currentTool = VCVS;
         g_showDepSourcePopup = true;
@@ -1598,6 +1863,10 @@ void RenderToolbar() {
         g_currentTool = VCCS;
         g_showDepSourcePopup = true;
         g_depPopupError.clear();
+    } ImGui::SameLine();
+    if (ImGui::Button("Sub")) {
+        g_currentTool = SUBCIRCUIT_TOOL;
+        g_subcircuitSelectionStep = 0;
     } ImGui::SameLine();
     if (ImGui::Button("VM")) { g_currentTool = VOLTMETER; } ImGui::SameLine();
 
@@ -1687,6 +1956,7 @@ void RenderRunPopup() {
         ImGui::RadioButton("AC Sweep", (int*)&g_runChoice, RUN_AC);
         ImGui::RadioButton("Transient (V vs t)", (int*)&g_runChoice, RUN_VT);
         ImGui::RadioButton("Transient (I vs t)", (int*)&g_runChoice, RUN_IT);
+        ImGui::RadioButton("Phase Sweep", (int*)&g_runChoice, RUN_PHASE);
         ImGui::Separator();
 
         // --- Show inputs based on the selected analysis type ---
@@ -1705,6 +1975,12 @@ void RenderRunPopup() {
             ImGui::InputText("End Time (s)", g_itEndText, 64);
             ImGui::InputText("Max Timestep (s)", g_itMaxStepText, 64);
             ImGui::InputText("Element(s)", g_itElemText, 64);
+        } else if (g_runChoice == RUN_PHASE) {
+            ImGui::InputText("Base Freq (Hz)", g_phaseBaseFreqText, 64);
+            ImGui::InputText("Start Phase (deg)", g_phaseStartText, 64);
+            ImGui::InputText("Stop Phase (deg)", g_phaseStopText, 64);
+            ImGui::InputText("Num Steps", g_phaseNumStepsText, 64);
+            ImGui::InputText("Probe Node", g_phaseProbeText, 64);
         } else {
             ImGui::Text("Calculates the DC operating point of the circuit.");
         }
@@ -1764,6 +2040,36 @@ void RenderRunPopup() {
                     g_circuit.setTransientWindow(t_start, t_end, t_step);
                     g_circuit.simulateTransientCapture(g_waves, wanted_nodes, wanted_elements);
                     g_showTransientPlot = true;
+                } else if (g_runChoice == RUN_PHASE) {
+                    double base_freq = parseNumber(g_phaseBaseFreqText);
+                    double phase_start_deg = parseNumber(g_phaseStartText);
+                    double phase_stop_deg = parseNumber(g_phaseStopText);
+                    int num_steps = std::stoi(g_phaseNumStepsText);
+                    g_phase_probe_node = g_phaseProbeText;
+
+                    g_phase_angles.clear();
+                    g_phase_mags.clear();
+
+                    for (int i = 0; i <= num_steps; ++i) {
+                        double phase_deg = phase_start_deg + (phase_stop_deg - phase_start_deg) * i / num_steps;
+                        double phase_rad = phase_deg * M_PI / 180.0;
+
+                        // Find the first VPHASE/VSIN source and set its phase
+                        for (auto *e: g_circuit.elements) {
+                            if (auto vs = dynamic_cast<VoltageSource *>(e)) {
+                                vs->phase = phase_rad;
+                                break; // Only modify the first source found
+                            }
+                        }
+
+                        std::map<std::string, cd> V;
+                        solveACAtFrequency(g_circuit, base_freq, V);
+                        cd v_out = V.count(g_phase_probe_node) ? V.at(g_phase_probe_node) : 0;
+
+                        g_phase_angles.push_back(phase_deg);
+                        g_phase_mags.push_back(std::abs(v_out));
+                    }
+                    g_showPhasePlot = true;
                 }
             } catch (const std::exception& e) {
                 g_simulationError = e.what();
@@ -1999,14 +2305,66 @@ void RenderACPlotWindow() {
     ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
     ImGui::Begin("AC Sweep Results", &g_showACPlot);
 
-    // Begin the plot with only a title
     if (ImPlot::BeginPlot(("V(" + g_ac_probe_node + ")").c_str())) {
+        // Setup axes with a log scale for Frequency
         ImPlot::SetupAxes("Frequency (Hz)", "Magnitude (dB)");
-
         ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
 
+        // Plot the main magnitude data
         if (!g_ac_freqs.empty()) {
             ImPlot::PlotLine("Magnitude", g_ac_freqs.data(), g_ac_mags_db.data(), g_ac_freqs.size());
+        }
+
+        // --- NEW: Cursor and Tooltip Logic ---
+        if (ImPlot::IsPlotHovered()) {
+            // Find the closest point using screen pixels for accuracy on the log scale
+            ImVec2 mouse_pixels = ImGui::GetMousePos();
+            int closest_point_idx = -1;
+            float min_dist_sq = 100.0f; // 10 pixel radius
+
+            if (!g_ac_freqs.empty()) {
+                for (int i = 0; i < g_ac_freqs.size(); ++i) {
+                    ImVec2 p_pixels = ImPlot::PlotToPixels({ g_ac_freqs[i], g_ac_mags_db[i] });
+                    float dx = mouse_pixels.x - p_pixels.x;
+                    float dy = mouse_pixels.y - p_pixels.y;
+                    float dist_sq = dx*dx + dy*dy;
+                    if (dist_sq < min_dist_sq) {
+                        min_dist_sq = dist_sq;
+                        closest_point_idx = i;
+                    }
+                }
+            }
+
+            // Show tooltip if a point is found
+            if (closest_point_idx != -1) {
+                double found_x = g_ac_freqs[closest_point_idx];
+                double found_y = g_ac_mags_db[closest_point_idx];
+                ImPlot::GetPlotDrawList()->AddCircleFilled(ImPlot::PlotToPixels({found_x, found_y}), 5, IM_COL32(255, 0, 0, 255));
+
+                ImGui::BeginTooltip();
+                ImGui::Text("Freq: %.2f Hz", found_x);
+                ImGui::Text("Mag:  %.2f dB", found_y);
+                ImGui::EndTooltip();
+
+                // Place Cursors with Ctrl/Shift + Middle-Click
+                if ((ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    ImPlotPoint found_point = { found_x, found_y };
+                    if (ImGui::GetIO().KeyCtrl) { g_cursor1_active = true; g_cursor1_pos = found_point; }
+                    if (ImGui::GetIO().KeyShift) { g_cursor2_active = true; g_cursor2_pos = found_point; }
+                }
+            }
+        }
+
+        // Draw and constrain draggable cursors
+        if (g_cursor1_active) {
+            if (ImPlot::DragPoint(0, &g_cursor1_pos.x, &g_cursor1_pos.y, ImVec4(1,1,0,1), 4)) {
+                g_cursor1_pos.y = interpolate(g_ac_freqs, g_ac_mags_db, g_cursor1_pos.x);
+            }
+        }
+        if (g_cursor2_active) {
+            if (ImPlot::DragPoint(1, &g_cursor2_pos.x, &g_cursor2_pos.y, ImVec4(0,1,1,1), 4)) {
+                g_cursor2_pos.y = interpolate(g_ac_freqs, g_ac_mags_db, g_cursor2_pos.x);
+            }
         }
 
         ImPlot::EndPlot();
@@ -2180,6 +2538,119 @@ void RenderIDeltaPopup() {
 }
 
 
+void RenderVPhasePopup() {
+    if (g_showVPhasePopup) { ImGui::OpenPopup("Phase Voltage Source"); g_showVPhasePopup = false; }
+    if (ImGui::BeginPopupModal("Phase Voltage Source", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Phase Source Properties");
+        ImGui::Separator();
+        ImGui::InputText("Name", g_vphaseNameBuffer, 64);
+        ImGui::InputText("Amplitude (V)", g_vphaseAmpBuffer, 64);
+        ImGui::InputText("Frequency (Hz)", g_vphaseFreqBuffer, 64);
+        ImGui::InputText("Phase (deg)", g_vphasePhaseBuffer, 64);
+        if (ImGui::Button("OK")) { g_currentTool = VPHASE; ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+    }
+}
+
+
+void RenderPhasePlotWindow() {
+    if (!g_showPhasePlot) {
+        g_showAddTrace = false;
+        g_showSubtractTrace = false;
+        return;
+    }
+    ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Phase Sweep Results", &g_showPhasePlot);
+
+    // --- 1. Prepare signals for Math Channel dropdowns ---
+    // Note: This will only show one signal for now, but is ready for the future
+    g_plot_signal_names.clear();
+    g_plot_signal_map.clear();
+    if (!g_phase_mags.empty()) {
+        g_plot_signal_names.push_back(g_phase_probe_node.c_str());
+        g_plot_signal_map[0] = {g_phase_probe_node, 'V'};
+    }
+
+    // --- 2. Math Channel Controls ---
+    if (ImGui::CollapsingHeader("Math Channel")) {
+        ImGui::Combo("Signal A", &g_mathSignal1_idx, g_plot_signal_names.data(), g_plot_signal_names.size());
+        ImGui::Combo("Signal B", &g_mathSignal2_idx, g_plot_signal_names.data(), g_plot_signal_names.size());
+        ImGui::Checkbox("Plot Sum (A+B)", &g_showAddTrace);
+        ImGui::SameLine();
+        ImGui::Checkbox("Plot Difference (A-B)", &g_showSubtractTrace);
+    }
+
+    // --- 3. Draw the Plot ---
+    if (ImPlot::BeginPlot(("V(" + g_phase_probe_node + ")").c_str())) {
+        ImPlot::SetupAxes("Phase (degrees)", "Magnitude (V)");
+
+        // Plot the main signal
+        if (!g_phase_angles.empty()) {
+            ImPlot::PlotLine("Magnitude", g_phase_angles.data(), g_phase_mags.data(), g_phase_angles.size());
+        }
+
+        // --- Snap-to-Signal Cursor/Tooltip Logic ---
+        if (ImPlot::IsPlotHovered()) {
+            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+            int closest_point_idx = -1;
+            float min_dist_sq = 100.0f; // 10 pixel radius
+
+            // Find the closest point on the magnitude curve
+            if (!g_phase_mags.empty()) {
+                ImVec2 mouse_pixels = ImGui::GetMousePos();
+                for (int i = 0; i < g_phase_angles.size(); ++i) {
+                    ImVec2 p_pixels = ImPlot::PlotToPixels({ g_phase_angles[i], g_phase_mags[i] });
+                    float dx = mouse_pixels.x - p_pixels.x;
+                    float dy = mouse_pixels.y - p_pixels.y;
+                    float dist_sq = dx*dx + dy*dy;
+                    if (dist_sq < min_dist_sq) {
+                        min_dist_sq = dist_sq;
+                        closest_point_idx = i;
+                    }
+                }
+            }
+
+            // Show tooltip
+            if (closest_point_idx != -1) {
+                double found_x = g_phase_angles[closest_point_idx];
+                double found_y = g_phase_mags[closest_point_idx];
+                ImPlot::GetPlotDrawList()->AddCircleFilled(ImPlot::PlotToPixels({found_x, found_y}), 5, IM_COL32(255, 0, 0, 255));
+                ImGui::BeginTooltip();
+                ImGui::Text("%s", g_phase_probe_node.c_str());
+                ImGui::Text("Phase: %.2f deg", found_x);
+                ImGui::Text("Magnitude: %.3f V", found_y);
+                ImGui::EndTooltip();
+
+                // Place Cursors
+                if (ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    g_cursor1_active = true;
+                    g_cursor1_pos = { found_x, found_y };
+                }
+                if (ImGui::GetIO().KeyShift && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    g_cursor2_active = true;
+                    g_cursor2_pos = { found_x, found_y };
+                }
+            }
+        }
+
+        // Draw and handle draggable cursors
+        if (g_cursor1_active) {
+            if (ImPlot::DragPoint(0, &g_cursor1_pos.x, &g_cursor1_pos.y, ImVec4(1,1,0,1), 4)) {
+                g_cursor1_pos.y = interpolate(g_phase_angles, g_phase_mags, g_cursor1_pos.x);
+            }
+        }
+        if (g_cursor2_active) {
+            if (ImPlot::DragPoint(1, &g_cursor2_pos.x, &g_cursor2_pos.y, ImVec4(0,1,1,1), 4)) {
+                g_cursor2_pos.y = interpolate(g_phase_angles, g_phase_mags, g_cursor2_pos.x);
+            }
+        }
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+}
+
 void RenderDependentSourcePopup() {
     if (g_showDepSourcePopup) {
         ImGui::OpenPopup("Dependent Source Properties");
@@ -2269,6 +2740,61 @@ void RenderCursorWindow() {
     ImGui::End();
 }
 
+
+void RenderSubcircuitCreationWindow() {
+    if (g_subcircuitSelectionStep != 2) return;
+
+    ImGui::OpenPopup("Create Subcircuit");
+    if (ImGui::BeginPopupModal("Create Subcircuit", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("External Node 1: %s", g_subcircuitNode1_name.c_str());
+        ImGui::Text("External Node 2: %s", g_subcircuitNode2_name.c_str());
+        ImGui::InputText("Subcircuit Name", g_subcircuitNameBuffer, 64);
+
+        if (ImGui::Button("Create")) {
+            SCircuit saved_data = createSaveDataFromCanvas(false); // Save without ground check
+            g_subcircuitLibrary.push_back({
+                                                  g_subcircuitNameBuffer,
+                                                  saved_data.Snodes,
+                                                  saved_data.Selements,
+                                                  saved_data.Swires,
+                                                  g_subcircuitNode1_name,
+                                                  g_subcircuitNode2_name
+                                          });
+
+            SaveSubcircuitLibrary();
+
+            std::cout << "Subcircuit '" << g_subcircuitNameBuffer << "' created." << std::endl;
+            g_subcircuitSelectionStep = 0;
+            g_currentTool = NONE;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            g_subcircuitSelectionStep = 0;
+            g_currentTool = NONE;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void RenderSubcircuitMenu() {
+    // This adds a new "Sub" menu to the main menu bar
+    if (ImGui::BeginMenu("Sub")) {
+        if (g_subcircuitLibrary.empty()) {
+            ImGui::MenuItem("(Empty)", NULL, false, false);
+        } else {
+            for (int i = 0; i < g_subcircuitLibrary.size(); ++i) {
+                if (ImGui::MenuItem(g_subcircuitLibrary[i].name.c_str())) {
+                    g_currentTool = SUBCIRCUIT_INSTANCE;
+                    g_placingSubcircuit_idx = i;
+                    g_previewIsVertical = false;
+                }
+            }
+        }
+        ImGui::EndMenu();
+    }
+}
 
 // ========================================================================================================
 // Helper function to format a number with SI prefixes (k, M, m, u, n)
@@ -2509,6 +3035,15 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, int index
             break;
         }
 
+        case VPHASE: {
+            drawList->AddCircle(pos, 15.0f, color, 0, thickness);
+            drawList->PathLineTo(ImVec2(pos.x - 10, pos.y));
+            drawList->PathBezierCubicCurveTo(ImVec2(pos.x - 5, pos.y - 10), ImVec2(pos.x + 5, pos.y + 10), ImVec2(pos.x + 10, pos.y), 10);
+            drawList->PathStroke(color, ImDrawFlags_None, thickness);
+            drawList->AddText(ImVec2(pos.x - 4, pos.y - 15), color, "f");
+            break;
+        }
+
         case VCVS: {
             ImVec2 p1_d = {pos.x - 15, pos.y}, p2_d = {pos.x, pos.y - 15};
             ImVec2 p3_d = {pos.x + 15, pos.y}, p4_d = {pos.x, pos.y + 15};
@@ -2545,6 +3080,19 @@ void DrawComponent(ImDrawList* drawList, const PlacedElement& element, int index
             drawList->AddLine({pos.x - 5, pos.y}, {pos.x + 5, pos.y}, color, thickness);
             drawList->AddLine({pos.x + 5, pos.y}, {pos.x, pos.y - 4}, color, thickness);
             drawList->AddLine({pos.x + 5, pos.y}, {pos.x, pos.y + 4}, color, thickness);
+            break;
+        }
+
+        case SUBCIRCUIT_INSTANCE: {
+            float half_w = element.size.x / 2.0f;
+            float half_h = element.size.y / 2.0f;
+            if(element.isVertical) std::swap(half_w, half_h);
+            drawList->AddRect({pos.x - half_w, pos.y - half_h}, {pos.x + half_w, pos.y + half_h}, color, 4.0f, 0, thickness);
+            if (element.subcircuit_def_idx != -1) {
+                const char* label = g_subcircuitLibrary[element.subcircuit_def_idx].name.c_str();
+                ImVec2 text_size = ImGui::CalcTextSize(label);
+                drawList->AddText({pos.x - text_size.x / 2, pos.y - text_size.y / 2}, color, label);
+            }
             break;
         }
 
@@ -2713,15 +3261,13 @@ void HandleCanvasShortcuts() {
         return;
     }
 
-    // --- Handle Escape key for canceling moves ---
+    // --- Action Keys (Highest Priority) ---
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         if (g_isMovingElement) {
-            // Cancel the move and restore original position
             g_placedElements[g_selectedIndex].pos = g_originalPos;
             g_isMovingElement = false;
             g_selectedIndex = -1;
         } else {
-            // Deselect the active tool
             g_currentTool = NONE;
             g_isPlacingWire = false;
             g_previewIsVertical = false;
@@ -2729,7 +3275,6 @@ void HandleCanvasShortcuts() {
         return;
     }
 
-    // --- Handle Delete key ---
     if (ImGui::IsKeyPressed(ImGuiKey_Delete) && g_selectedIndex != -1) {
         g_placedElements.erase(g_placedElements.begin() + g_selectedIndex);
         g_selectedIndex = -1;
@@ -2739,10 +3284,15 @@ void HandleCanvasShortcuts() {
 
     // --- Rotation (Second Priority) ---
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
-        if (g_currentTool != NONE && g_currentTool != WIRE) {
+        // Priority 1: Rotate a selected element
+        if (g_selectedIndex != -1) {
+            g_placedElements[g_selectedIndex].isVertical = !g_placedElements[g_selectedIndex].isVertical;
+        }
+            // Priority 2: Rotate the current tool's preview
+        else if (g_currentTool != NONE && g_currentTool != WIRE) {
             g_previewIsVertical = !g_previewIsVertical;
         }
-        return; // Action handled, do nothing else.
+        return; // Action handled
     }
 
     // --- Tool Selection (Lowest Priority) ---
@@ -2813,7 +3363,33 @@ void RenderCanvas() {
 
         // --- Placement Logic ---
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-            if (g_currentTool == NONE) {
+
+            if (g_currentTool == SUBCIRCUIT_TOOL) {
+                buildCircuit(false); // Analyze connections without requiring a ground
+                int closest_connector_id = -1;
+                float min_dist_sq = 100.0f;
+                for (const auto& conn : g_allConnectors) {
+                    float dx = conn.pos.x - snapped_pos.x; float dy = conn.pos.y - snapped_pos.y;
+                    if ((dx * dx + dy * dy) < min_dist_sq) {
+                        min_dist_sq = (dx * dx + dy * dy);
+                        closest_connector_id = conn.id;
+                    }
+                }
+
+                if (closest_connector_id != -1) {
+                    std::string clicked_node_name = g_connectorToNodeName.at(closest_connector_id);
+                    if (g_subcircuitSelectionStep == 0) {
+                        g_subcircuitNode1_name = clicked_node_name;
+                        g_subcircuitNode1_pos = snapped_pos;
+                        g_subcircuitSelectionStep = 1;
+                    } else if (g_subcircuitSelectionStep == 1 && clicked_node_name != g_subcircuitNode1_name) {
+                        g_subcircuitNode2_name = clicked_node_name;
+                        g_subcircuitNode2_pos = snapped_pos;
+                        g_subcircuitSelectionStep = 2; // Both nodes selected, popup will now appear
+                    }
+                }
+            }
+            else if (g_currentTool == NONE) {
                 if (g_isMovingElement) {
                     // If we were moving an element, this click places it.
                     g_isMovingElement = false;
@@ -2840,142 +3416,168 @@ void RenderCanvas() {
                         }
                     }
                 }
-            }
-            if (g_currentTool == VOLTMETER) {
-                buildCircuit();
-                int closest_connector_id = -1;
-                float min_dist_sq = 100.0f;
-                for (const auto& conn : g_allConnectors) {
-                    float dx = conn.pos.x - snapped_pos.x;
-                    float dy = conn.pos.y - snapped_pos.y;
-                    float dist_sq = dx * dx + dy * dy;
-                    if (dist_sq < min_dist_sq) {
-                        min_dist_sq = dist_sq;
-                        closest_connector_id = conn.id;
-                    }
-                }
-                if (closest_connector_id != -1) {
-                    try {
-                        g_circuit.computeDCOP(g_dcVoltages, g_dcCurrents);
-                        std::string node_name = g_connectorToNodeName.at(closest_connector_id);
-                        double voltage = (node_name == g_circuit.groundName) ? 0.0 : g_dcVoltages.at(node_name);
-                        g_probes.push_back({snapped_pos, node_name, voltage});
-                    } catch (const std::exception& e) {
-                        g_simulationError = e.what();
-                        g_showDCResults = true;
-                    }
-                }
-                g_currentTool = NONE;
-            } else if (g_currentTool == WIRE) {
-                if (!g_isPlacingWire) {
-                    // First click: Start the wire
-                    g_isPlacingWire = true;
-                    g_wireStartPos = snapped_pos;
-                } else {
-                    // Second click: Finish the wire and check for junctions
-                    ImVec2 end_pos = snapped_pos;
-
-                    // Check if the end point lands on an existing wire
-                    int split_wire_index = -1;
-                    for (int i = 0; i < g_wires.size(); ++i) {
-                        if (IsPointOnWire(end_pos, g_wires[i])) {
-                            split_wire_index = i;
-                            break;
+            } else {
+                if (g_currentTool == VOLTMETER) {
+                    buildCircuit();
+                    int closest_connector_id = -1;
+                    float min_dist_sq = 100.0f;
+                    for (const auto &conn: g_allConnectors) {
+                        float dx = conn.pos.x - snapped_pos.x;
+                        float dy = conn.pos.y - snapped_pos.y;
+                        float dist_sq = dx * dx + dy * dy;
+                        if (dist_sq < min_dist_sq) {
+                            min_dist_sq = dist_sq;
+                            closest_connector_id = conn.id;
                         }
                     }
+                    if (closest_connector_id != -1) {
+                        try {
+                            g_circuit.computeDCOP(g_dcVoltages, g_dcCurrents);
+                            std::string node_name = g_connectorToNodeName.at(closest_connector_id);
+                            double voltage = (node_name == g_circuit.groundName) ? 0.0 : g_dcVoltages.at(node_name);
+                            g_probes.push_back({snapped_pos, node_name, voltage});
+                        } catch (const std::exception &e) {
+                            g_simulationError = e.what();
+                            g_showDCResults = true;
+                        }
+                    }
+                    g_currentTool = NONE;
+                } else if (g_currentTool == WIRE) {
+                    if (!g_isPlacingWire) {
+                        // First click: Start the wire
+                        g_isPlacingWire = true;
+                        g_wireStartPos = snapped_pos;
+                    } else {
+                        // Second click: Finish the wire and check for junctions
+                        ImVec2 end_pos = snapped_pos;
 
-                    if (split_wire_index != -1) {
-                        // We found a T-junction. Split the existing wire.
-                        Wire old_wire = g_wires[split_wire_index];
+                        // Check if the end point lands on an existing wire
+                        int split_wire_index = -1;
+                        for (int i = 0; i < g_wires.size(); ++i) {
+                            if (IsPointOnWire(end_pos, g_wires[i])) {
+                                split_wire_index = i;
+                                break;
+                            }
+                        }
 
-                        // Remove the old, long wire
-                        g_wires.erase(g_wires.begin() + split_wire_index);
+                        if (split_wire_index != -1) {
+                            // We found a T-junction. Split the existing wire.
+                            Wire old_wire = g_wires[split_wire_index];
 
-                        // Add two new, shorter wires in its place
-                        g_wires.push_back({old_wire.p1, end_pos});
-                        g_wires.push_back({end_pos, old_wire.p2});
+                            // Remove the old, long wire
+                            g_wires.erase(g_wires.begin() + split_wire_index);
+
+                            // Add two new, shorter wires in its place
+                            g_wires.push_back({old_wire.p1, end_pos});
+                            g_wires.push_back({end_pos, old_wire.p2});
+                        }
+
+                        // Add the new wire the user just drew
+                        g_wires.push_back({g_wireStartPos, end_pos});
+
+                        g_isPlacingWire = false;
+                        g_currentTool = NONE; // Deselect the tool
+                    }
+                } else if (g_currentTool != NONE) {
+                    PlacedElement new_elem{};
+                    new_elem.type = g_currentTool;
+                    new_elem.pos = snapped_pos;
+                    new_elem.isVertical = g_previewIsVertical;
+
+                    if (g_currentTool == SUBCIRCUIT_INSTANCE) {
+                        new_elem.name = g_subcircuitLibrary.at(g_placingSubcircuit_idx).name;
+                        new_elem.subcircuit_def_idx = g_placingSubcircuit_idx;
+                        new_elem.size = ImVec2(80, 50); // Set the default size
+                    } else if (g_currentTool == VSIN) {
+                        new_elem.name = g_vacNameBuffer;
+                        new_elem.value = parseNumber(g_vacDcOffsetText);
+                        new_elem.amp = parseNumber(g_vacAmpText);
+                        new_elem.freq = parseNumber(g_vacFreqText);
+                    } else if (g_currentTool == CSIN) {
+                        new_elem.name = g_iacNameBuffer;
+                        new_elem.value = parseNumber(g_iacDcOffsetText);
+                        new_elem.amp = parseNumber(g_iacAmpText);
+                        new_elem.freq = parseNumber(g_iacFreqText);
+                    } else if (g_currentTool == VPULSE) {
+                        new_elem.name = g_vpulseNameBuffer;
+                        new_elem.v_initial = parseNumber(g_vpulseVInitial);
+                        new_elem.v_on = parseNumber(g_vpulseVOn);
+                        new_elem.t_delay = parseNumber(g_vpulseTDelay);
+                        new_elem.t_rise = parseNumber(g_vpulseTRise);
+                        new_elem.t_fall = parseNumber(g_vpulseTFall);
+                        new_elem.t_on = parseNumber(g_vpulseTOn);
+                        new_elem.t_period = parseNumber(g_vpulseTPeriod);
+                    } else if (g_currentTool == IPULSE) {
+                        new_elem.name = g_ipulseNameBuffer;
+                        new_elem.i_initial = parseNumber(g_ipulseIInitial);
+                        new_elem.i_on = parseNumber(g_ipulseIOn);
+                        new_elem.t_delay = parseNumber(g_ipulseTDelay);
+                        new_elem.t_rise = parseNumber(g_ipulseTRise);
+                        new_elem.t_fall = parseNumber(g_ipulseTFall);
+                        new_elem.t_on = parseNumber(g_ipulseTOn);
+                        new_elem.t_period = parseNumber(g_ipulseTPeriod);
+                    } else if (g_currentTool == VDELTA) {
+                        new_elem.name = g_vdeltaNameBuffer;
+                        new_elem.t_pulse = parseNumber(g_vdeltaTPulse);
+                        new_elem.area = parseNumber(g_vdeltaArea);
+                    } else if (g_currentTool == IDELTA) {
+                        new_elem.name = g_ideltaNameBuffer;
+                        new_elem.t_pulse = parseNumber(g_ideltaTPulse);
+                        new_elem.area = parseNumber(g_ideltaArea);
+                    } else if (g_currentTool == VPHASE) {
+                        new_elem.name = g_vphaseNameBuffer;
+                        new_elem.amp = parseNumber(g_vphaseAmpBuffer);
+                        new_elem.freq = parseNumber(g_vphaseFreqBuffer);
+                        new_elem.phase = parseNumber(g_vphasePhaseBuffer) * M_PI / 180.0; // Convert to radians
+                    } else if (g_currentTool == VCVS || g_currentTool == VCCS) {
+                        new_elem.name = g_depNameBuffer;
+                        new_elem.gain = parseNumber(g_depGainBuffer);
+                        strcpy_s(new_elem.ctrlNodeP_name, g_depCtrlPBuffer);
+                        strcpy_s(new_elem.ctrlNodeN_name, g_depCtrlNBuffer);
+                    } else { // Regular components (R, C, L, D, I)
+                        new_elem.name = g_componentNameBuffer;
+                        new_elem.value = parseNumber(g_componentValueBuffer);
                     }
 
-                    // Add the new wire the user just drew
-                    g_wires.push_back({g_wireStartPos, end_pos});
+                    if (g_currentTool == GROUND) {
+                        new_elem.name = "GND";
+                        new_elem.value = 0.0;
+                    }
 
-                    g_isPlacingWire = false;
-                    g_currentTool = NONE; // Deselect the tool
+                    g_placedElements.push_back(new_elem);
+
+                    g_currentTool = NONE;
+                    g_previewIsVertical = false;
                 }
-            } else if (g_currentTool != NONE) {
-                PlacedElement new_elem{};
-                new_elem.type = g_currentTool;
-                new_elem.pos = snapped_pos;
-                new_elem.isVertical = g_previewIsVertical;
-
-                if (g_currentTool == VSIN) {
-                    new_elem.name = g_vacNameBuffer;
-                    new_elem.value = parseNumber(g_vacDcOffsetText);
-                    new_elem.amp = parseNumber(g_vacAmpText);
-                    new_elem.freq = parseNumber(g_vacFreqText);
-                } else if (g_currentTool == CSIN) {
-                    new_elem.name = g_iacNameBuffer;
-                    new_elem.value = parseNumber(g_iacDcOffsetText);
-                    new_elem.amp = parseNumber(g_iacAmpText);
-                    new_elem.freq = parseNumber(g_iacFreqText);
-                } else if (g_currentTool == VPULSE) {
-                    new_elem.name = g_vpulseNameBuffer;
-                    new_elem.v_initial = parseNumber(g_vpulseVInitial);
-                    new_elem.v_on = parseNumber(g_vpulseVOn);
-                    new_elem.t_delay = parseNumber(g_vpulseTDelay);
-                    new_elem.t_rise = parseNumber(g_vpulseTRise);
-                    new_elem.t_fall = parseNumber(g_vpulseTFall);
-                    new_elem.t_on = parseNumber(g_vpulseTOn);
-                    new_elem.t_period = parseNumber(g_vpulseTPeriod);
-                } else if (g_currentTool == IPULSE) {
-                    new_elem.name = g_ipulseNameBuffer;
-                    new_elem.i_initial = parseNumber(g_ipulseIInitial);
-                    new_elem.i_on = parseNumber(g_ipulseIOn);
-                    new_elem.t_delay = parseNumber(g_ipulseTDelay);
-                    new_elem.t_rise = parseNumber(g_ipulseTRise);
-                    new_elem.t_fall = parseNumber(g_ipulseTFall);
-                    new_elem.t_on = parseNumber(g_ipulseTOn);
-                    new_elem.t_period = parseNumber(g_ipulseTPeriod);
-                } else if (g_currentTool == VDELTA) {
-                    new_elem.name = g_vdeltaNameBuffer;
-                    new_elem.t_pulse = parseNumber(g_vdeltaTPulse);
-                    new_elem.area = parseNumber(g_vdeltaArea);
-                } else if (g_currentTool == IDELTA) {
-                    new_elem.name = g_ideltaNameBuffer;
-                    new_elem.t_pulse = parseNumber(g_ideltaTPulse);
-                    new_elem.area = parseNumber(g_ideltaArea);
-                } else if (g_currentTool == VCVS || g_currentTool == VCCS) {
-                    new_elem.name = g_depNameBuffer;
-                    new_elem.gain = parseNumber(g_depGainBuffer);
-                    strcpy_s(new_elem.ctrlNodeP_name, g_depCtrlPBuffer);
-                    strcpy_s(new_elem.ctrlNodeN_name, g_depCtrlNBuffer);
-                } else { // Regular components (R, C, L, D, I)
-                    new_elem.name = g_componentNameBuffer;
-                    new_elem.value = parseNumber(g_componentValueBuffer);
-                }
-
-                if (g_currentTool == GROUND) {
-                    new_elem.name = "GND";
-                    new_elem.value = 0.0;
-                }
-
-                g_placedElements.push_back(new_elem);
-
-                g_currentTool = NONE;
-                g_previewIsVertical = false;
             }
         }
 
 
+        // --- Preview Logic ---
         // --- Preview Logic ---
         if (g_currentTool != NONE) {
             if (g_currentTool == WIRE && g_isPlacingWire) {
                 ImVec2 start_abs = ImVec2(canvas_p0.x + g_wireStartPos.x, canvas_p0.y + g_wireStartPos.y);
                 ImVec2 end_abs = ImVec2(canvas_p0.x + snapped_pos.x, canvas_p0.y + snapped_pos.y);
                 drawList->AddLine(start_abs, end_abs, IM_COL32(0, 0, 255, 255), 1.5f);
-            } else if (g_currentTool != WIRE) {
+            }
+            else if (g_currentTool == VOLTMETER) {
+                drawList->AddCircle(ImVec2(canvas_p0.x + snapped_pos.x, canvas_p0.y + snapped_pos.y), 15.0f, IM_COL32(23, 107, 135, 255), 0, 1.5f);
+                drawList->AddText(ImVec2(canvas_p0.x + snapped_pos.x - 4, canvas_p0.y + snapped_pos.y - 8), IM_COL32(23, 107, 135, 255), "V");
+            }
+                // --- NEW: Special preview for Subcircuit Instances ---
+            else if (g_currentTool == SUBCIRCUIT_INSTANCE) {
+                PlacedElement preview_element{};
+                preview_element.type = SUBCIRCUIT_INSTANCE;
+                preview_element.pos = snapped_pos;
+                preview_element.isVertical = g_previewIsVertical;
+                preview_element.subcircuit_def_idx = g_placingSubcircuit_idx; // Pass the index
+                preview_element.size = ImVec2(80, 50); // Use the default size
+                DrawComponent(drawList, preview_element, -1, canvas_p0);
+            }
+                // This condition now correctly excludes all special tools
+            else if (g_currentTool != SUBCIRCUIT_TOOL) {
                 PlacedElement preview_element = { g_currentTool, snapped_pos, "", 0.0, g_previewIsVertical };
-                // FIX: Pass -1 as the index for a preview element, as it's not selected.
                 DrawComponent(drawList, preview_element, -1, canvas_p0);
             }
         }
@@ -2994,6 +3596,19 @@ void RenderCanvas() {
         drawList->AddRectFilled(ImVec2(p2.x - 2, p2.y - 2), ImVec2(p2.x + 2, p2.y + 2), IM_COL32(0, 0, 0, 255));
     }
     for (const auto& probe : g_probes) DrawProbe(drawList, probe, canvas_p0);
+
+
+    if (g_currentTool == SUBCIRCUIT_TOOL) {
+        const char* instruction = "Select the FIRST external node (+ Port).";
+        if (g_subcircuitSelectionStep == 1) {
+            instruction = "Select the SECOND external node (- Port).";
+            // Draw a marker on the first selected port
+            drawList->AddText(ImVec2(canvas_p0.x + g_subcircuitNode1_pos.x, canvas_p0.y + g_subcircuitNode1_pos.y - 20), IM_COL32(0, 150, 0, 255), "+ Port");
+        }
+        // Draw the main instruction text
+        drawList->AddText(ImVec2(canvas_p0.x + 10, canvas_p0.y + 10), IM_COL32(255, 0, 0, 255), instruction);
+    }
+
 
     UpdateAndDrawDebugInfo(drawList, canvas_p0);
 
@@ -3064,6 +3679,7 @@ int main() {
     // 3. Setup Dear ImGui and ImPlot contexts
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    LoadSubcircuitLibrary();
     ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
@@ -3109,12 +3725,15 @@ int main() {
         RenderIPulsePopup();
         RenderVDeltaPopup();
         RenderIDeltaPopup();
+        RenderVPhasePopup();
         RenderDependentSourcePopup();
         RenderCursorWindow();
+        RenderSubcircuitCreationWindow();
         RenderRunPopup();
         RenderDCResultsWindow();
         RenderTransientPlotWindow();
         RenderACPlotWindow();
+        RenderPhasePlotWindow();
         RenderCanvas();
 
         ImGui::End();
