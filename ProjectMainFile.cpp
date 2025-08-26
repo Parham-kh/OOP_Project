@@ -1,5 +1,5 @@
 // ===========================================
-//========== ماییم و نوای بی نوایی ==========
+// ========== ماییم و نوای بی نوایی ==========
 // ========== بسم الله اگرحریف مایی ==========
 // ===========================================
 
@@ -2692,49 +2692,41 @@ void RenderDependentSourcePopup() {
 
 
 void RenderCursorWindow() {
-    // Show this window only if at least one cursor is active
     if (!g_cursor1_active && !g_cursor2_active) {
         return;
     }
-
-    // Begin a new window to display the measurements
     ImGui::Begin("Cursor Measurements", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
-    // --- Cursor 1 Data ---
     ImGui::Text("Cursor 1");
     ImGui::Separator();
     if (g_cursor1_active) {
-        ImGui::Text("Time (Horz): %.4f s", g_cursor1_pos.x);
-        ImGui::Text("Value (Vert): %.4f", g_cursor1_pos.y);
+        ImGui::Text("Horizontal: %.4f", g_cursor1_pos.x);
+        ImGui::Text("Vertical:   %.4f", g_cursor1_pos.y);
     } else {
-        ImGui::Text("Time (Horz): --");
-        ImGui::Text("Value (Vert): --");
+        ImGui::Text("Horizontal: --");
+        ImGui::Text("Vertical:   --");
     }
-
     ImGui::Spacing();
 
-    // --- Cursor 2 Data ---
     ImGui::Text("Cursor 2");
     ImGui::Separator();
     if (g_cursor2_active) {
-        ImGui::Text("Time (Horz): %.4f s", g_cursor2_pos.x);
-        ImGui::Text("Value (Vert): %.4f", g_cursor2_pos.y);
+        ImGui::Text("Horizontal: %.4f", g_cursor2_pos.x);
+        ImGui::Text("Vertical:   %.4f", g_cursor2_pos.y);
     } else {
-        ImGui::Text("Time (Horz): --");
-        ImGui::Text("Value (Vert): --");
+        ImGui::Text("Horizontal: --");
+        ImGui::Text("Vertical:   --");
     }
-
     ImGui::Spacing();
 
-    // --- Difference Data ---
     ImGui::Text("Difference");
     ImGui::Separator();
     if (g_cursor1_active && g_cursor2_active) {
-        ImGui::Text("Horz (Δt): %.4f s", std::abs(g_cursor2_pos.x - g_cursor1_pos.x));
-        ImGui::Text("Vert (ΔV): %.4f", std::abs(g_cursor2_pos.y - g_cursor1_pos.y));
+        ImGui::Text("Horizontal (ΔX): %.4f", std::abs(g_cursor2_pos.x - g_cursor1_pos.x));
+        ImGui::Text("Vertical (ΔY):   %.4f", std::abs(g_cursor2_pos.y - g_cursor1_pos.y));
     } else {
-        ImGui::Text("Horz (Δt): --");
-        ImGui::Text("Vert (ΔV): --");
+        ImGui::Text("Horizontal (ΔX): --");
+        ImGui::Text("Vertical (ΔY):   --");
     }
 
     ImGui::End();
