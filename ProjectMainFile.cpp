@@ -39,8 +39,11 @@
 
 // ----------------- PROJECT HEADERS -----------------
 #include "save_load.h"
-//#include "recent_files.h"
+#include "recent_files.h"
 
+// Add with your other includes
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 // ================ Global Application State ================
 // Enum to represent the currently selected tool
@@ -229,6 +232,8 @@ ImPlotPoint g_cursor1_pos; // From implot.h, has .x and .y
 ImPlotPoint g_cursor2_pos;
 int g_cursor1_series_idx = -1; // Which signal the cursor is attached to
 int g_cursor2_series_idx = -1;
+
+std::string g_currentFilePath;
 
 // ================ Simulation Engine and Circuit Logic ================
 // This is the core simulation engine ported from your original project.
@@ -1196,11 +1201,10 @@ void buildCircuit() {
 
 
 // This function converts the visual schematic into a savable SCircuit object
-SCircuit createSaveDataFromCanvas() {
+SCircuit createSaveDataFromCanvas(bool require_ground = true) {
     SCircuit ckt_data;
 
     // 1. Perform connection analysis to find all logical nodes
-    g_circuit.reset();
     g_allConnectors.clear();
     g_connectorGraph.clear();
     g_connectorToNodeName.clear();
@@ -1255,7 +1259,7 @@ SCircuit createSaveDataFromCanvas() {
         }
     }
 
-    if (ground_root_id == -1) {
+    if (require_ground && ground_root_id == -1) { // <<< CHANGED
         throw NoGroundException();
     }
 
@@ -1362,6 +1366,74 @@ SCircuit createSaveDataFromCanvas() {
 }
 
 
+void NewProject() {
+    g_placedElements.clear();
+    g_wires.clear();
+    g_probes.clear();
+    g_selectedIndex = -1;
+    g_isMovingElement = false;
+    g_currentFilePath = "";
+    g_circuit.reset();
+}
+
+
+void loadCanvasFromSaveData(const SCircuit& ckt_data) {
+    NewProject(); // Start with a clean slate
+
+    // Helper map to convert saved strings back to ToolType enums
+    std::map<std::string, ToolType> kind_to_tool;
+    kind_to_tool["R"] = RESISTOR;
+    kind_to_tool["C"] = CAPACITOR;
+    kind_to_tool["L"] = INDUCTOR;
+    kind_to_tool["D"] = DIODE;
+    kind_to_tool["GND"] = GROUND;
+
+    std::map<std::string, ToolType> source_kind_to_tool;
+    source_kind_to_tool["DC"] = VSOURCE; // Default
+    source_kind_to_tool["SINE"] = VSIN;
+    source_kind_to_tool["PULSE"] = VPULSE;
+    source_kind_to_tool["DELTA"] = VDELTA;
+    source_kind_to_tool["VCVS"] = VCVS;
+    source_kind_to_tool["VCCS"] = VCCS;
+
+
+    for (const auto& se : ckt_data.Selements) {
+        PlacedElement e{};
+        e.name = se.name;
+        e.pos = ImVec2((float)se.x, (float)se.y);
+        e.isVertical = se.isVertical;
+        e.value = se.value;
+
+        if (se.kind == "V") {
+            e.type = source_kind_to_tool.count(se.sourceType) ? source_kind_to_tool[se.sourceType] : VSOURCE;
+            // Copy all source parameters from se to e
+            e.amp = se.amp; e.freq = se.freq;
+            e.v_initial = se.v_initial; e.v_on = se.v_on;
+            e.t_delay = se.t_delay; e.t_rise = se.t_rise; e.t_fall = se.t_fall; e.t_on = se.t_on; e.t_period = se.t_period;
+            e.t_pulse = se.t_pulse; e.area = se.area;
+            e.gain = se.gain;
+            strcpy_s(e.ctrlNodeP_name, se.ctrlNodeP_name.c_str());
+            strcpy_s(e.ctrlNodeN_name, se.ctrlNodeN_name.c_str());
+        }
+        else if (se.kind == "I") {
+            // A similar map would be needed for I-sources if they have different ToolTypes
+            e.type = CSOURCE; // Simplified for now
+        }
+        else {
+            e.type = kind_to_tool.at(se.kind);
+        }
+
+        g_placedElements.push_back(e);
+    }
+
+    for (const auto& sw : ckt_data.Swires) {
+        if (sw.points.size() >= 2) {
+            g_wires.push_back({ImVec2((float)sw.points[0].x, (float)sw.points[0].y),
+                               ImVec2((float)sw.points[1].x, (float)sw.points[1].y)});
+        }
+    }
+}
+
 // ================ (Add after Global State Variables) ================
 double parseNumber(std::string input) {
     if (input.empty()) return 0.0;
@@ -1401,25 +1473,93 @@ std::vector<std::string> splitList(const std::string& s) {
     return out;
 }
 
+
+
 // ================ UI Rendering Functions ================
+void DoSaveAs() {
+    auto path = pfd::save_file("Save Circuit As", "", { "JSON Files", "*.json" }).result();
+    if (!path.empty()) {
+        if (path.rfind(".json") == std::string::npos && path.rfind(".JSON") == std::string::npos) {
+            path += ".json";
+        }
+        g_currentFilePath = path;
+        SCircuit ckt_data = createSaveDataFromCanvas(false);
+        saveProject(g_currentFilePath, ckt_data);
+        recent_add(g_currentFilePath);
+    }
+}
+
+void DoSave() {
+    if (g_currentFilePath.empty()) {
+        DoSaveAs(); // If no path, act like "Save As"
+    } else {
+        SCircuit ckt_data = createSaveDataFromCanvas(false);
+        saveProject(g_currentFilePath, ckt_data);
+    }
+}
+
+void DoOpenFile(const std::string& path) {
+    SCircuit ckt_data;
+    if (loadProject(path, ckt_data)) {
+        loadCanvasFromSaveData(ckt_data);
+        g_currentFilePath = path;
+        recent_add(g_currentFilePath); // Add/move to top of recent list
+    } else {
+        std::cerr << "Failed to load project file: " << path << std::endl;
+        // Optional: Add an error pop-up for the user here
+    }
+}
+
+void DoOpen() {
+    auto selection = pfd::open_file("Open Circuit", "", { "JSON Files", "*.json" }).result();
+    if (!selection.empty()) {
+        DoOpenFile(selection[0]);
+    }
+}
+
 void RenderMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
+
         if (ImGui::BeginMenu("File")) {
-            // ... (File menu items remain the same) ...
+            if (ImGui::MenuItem("New", "Ctrl+N")) { NewProject(); }
+            if (ImGui::MenuItem("Open", "Ctrl+O")) { DoOpen(); }
+            if (ImGui::MenuItem("Save", "Ctrl+S")) { DoSave(); }
+            if (ImGui::MenuItem("Save As...")) { DoSaveAs(); }
+            ImGui::Separator();
+
+            // --- THIS IS THE CORRECTED BLOCK ---
+            // Use BeginMenu to create a submenu, not MenuItem
+            if (ImGui::BeginMenu("Recent Files")) {
+                std::vector<std::string> recent_files = recent_list();
+                if (recent_files.empty()) {
+                    ImGui::MenuItem("(Empty)", NULL, false, false);
+                } else {
+                    for (const auto& file_path : recent_files) {
+                        if (ImGui::MenuItem(file_path.c_str())) {
+                            DoOpenFile(file_path);
+                        }
+                    }
+                }
+                ImGui::EndMenu(); // This is now correctly paired with BeginMenu
+            }
+
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit")) { exit(0); }
             ImGui::EndMenu();
         }
+
+        // --- RUN & DEBUG MENUS (Unchanged) ---
         if (ImGui::BeginMenu("Run")) {
             if (ImGui::MenuItem("Run Simulation...")) {
                 g_showRunPopup = true;
             }
             ImGui::EndMenu();
         }
-        // --- NEW DEBUG MENU ---
         if (ImGui::BeginMenu("Debug")) {
             ImGui::MenuItem("Show Node Info", NULL, &g_showDebugInfo);
             ImGui::EndMenu();
         }
+
         ImGui::EndMainMenuBar();
     }
 }
@@ -2672,7 +2812,7 @@ void RenderCanvas() {
         }
 
         // --- Placement Logic ---
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
             if (g_currentTool == NONE) {
                 if (g_isMovingElement) {
                     // If we were moving an element, this click places it.
@@ -2861,6 +3001,21 @@ void RenderCanvas() {
 }
 
 
+void HandleGlobalShortcuts() {
+    // Don't process shortcuts if a text input is active
+    if (ImGui::IsAnyItemActive()) {
+        return;
+    }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl) {
+        if (ImGui::IsKeyPressed(ImGuiKey_N)) { NewProject(); }
+        if (ImGui::IsKeyPressed(ImGuiKey_O)) { DoOpen(); }
+        if (ImGui::IsKeyPressed(ImGuiKey_S)) { DoSave(); }
+    }
+}
+
+// *********************************************************************************************************************************
 // TODO: MAIN LOOP
 int main() {
     // 1. Initialize GLFW and create a window
@@ -2874,13 +3029,30 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Opulator Spice (ImGui Version)", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "New Gen z Circuit Simulator(V2.2.1)", NULL, NULL);
     if (!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return -1;
     }
     glfwMakeContextCurrent(window);
+
+    {
+        int width, height, channels;
+        // Make sure you have an "icon.png" file in your project folder
+        unsigned char* pixels = stbi_load("icon.png", &width, &height, &channels, 4);
+        if (pixels) {
+            GLFWimage images[1];
+            images[0].width = width;
+            images[0].height = height;
+            images[0].pixels = pixels;
+            glfwSetWindowIcon(window, 1, images);
+            stbi_image_free(pixels);
+        } else {
+            std::cerr << "Error: Could not load icon.png" << std::endl;
+        }
+    }
+
     glfwSwapInterval(1); // Enable vsync
 
     // 2. Initialize GLEW
@@ -2911,6 +3083,7 @@ int main() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        HandleGlobalShortcuts();
 
         // --- Create a single, fullscreen, non-interactable window as our main surface ---
         const ImGuiViewport* main_viewport = ImGui::GetMainViewport();

@@ -57,6 +57,14 @@ build CMakeFiles/OOP_Phase2_complete.dir/ProjectMainFile.cpp.obj: CXX_COMPILER__
   OBJECT_DIR = CMakeFiles\OOP_Phase2_complete.dir
   OBJECT_FILE_DIR = CMakeFiles\OOP_Phase2_complete.dir
 
+build CMakeFiles/OOP_Phase2_complete.dir/save_load.cpp.obj: CXX_COMPILER__OOP_Phase2_complete_unscanned_Debug C$:/Users/lenovo/Desktop/oop$ projects/OOP_Phase2$ complete/save_load.cpp || cmake_object_order_depends_target_OOP_Phase2_complete
+  DEFINES = -DGLEW_STATIC
+  DEP_FILE = CMakeFiles\OOP_Phase2_complete.dir\save_load.cpp.obj.d
+  FLAGS = -g -std=gnu++20 -fdiagnostics-color=always
+  INCLUDES = -I"C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/vendor" -I"C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/dependencies/imgui-master" -I"C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/dependencies/imgui-master/backends" -I"C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/dependencies/implot-master" -I"C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/dependencies/glfw-3.4.bin.WIN64/include" -I"C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/dependencies/glew-2.1.0/include"
+  OBJECT_DIR = CMakeFiles\OOP_Phase2_complete.dir
+  OBJECT_FILE_DIR = CMakeFiles\OOP_Phase2_complete.dir
+
 build CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui.cpp.obj: CXX_COMPILER__OOP_Phase2_complete_unscanned_Debug C$:/Users/lenovo/Desktop/oop$ projects/OOP_Phase2$ complete/dependencies/imgui-master/imgui.cpp || cmake_object_order_depends_target_OOP_Phase2_complete
   DEFINES = -DGLEW_STATIC
   DEP_FILE = CMakeFiles\OOP_Phase2_complete.dir\dependencies\imgui-master\imgui.cpp.obj.d
@@ -137,7 +145,7 @@ build CMakeFiles/OOP_Phase2_complete.dir/dependencies/implot-master/implot_items
 #############################################
 # Link the executable OOP_Phase2_complete.exe
 
-build OOP_Phase2_complete.exe: CXX_EXECUTABLE_LINKER__OOP_Phase2_complete_Debug CMakeFiles/OOP_Phase2_complete.dir/ProjectMainFile.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_draw.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_tables.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_widgets.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_demo.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/backends/imgui_impl_glfw.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/backends/imgui_impl_opengl3.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/implot-master/implot.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/implot-master/implot_items.cpp.obj
+build OOP_Phase2_complete.exe: CXX_EXECUTABLE_LINKER__OOP_Phase2_complete_Debug CMakeFiles/OOP_Phase2_complete.dir/ProjectMainFile.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/save_load.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_draw.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_tables.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_widgets.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/imgui_demo.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/backends/imgui_impl_glfw.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/imgui-master/backends/imgui_impl_opengl3.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/implot-master/implot.cpp.obj CMakeFiles/OOP_Phase2_complete.dir/dependencies/implot-master/implot_items.cpp.obj
   FLAGS = -g
   LINK_LIBRARIES = -lglew32s  -lglfw3  -lgdi32  -lopengl32  -lComdlg32  -lOle32  -lShell32  -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32
   LINK_PATH = -LC:/Users/lenovo/Desktop/OOPPRO~1/OOP_PH~1/DEPEND~1/GLFW-3~1.WIN/LIB-MI~1   -LC:/Users/lenovo/Desktop/OOPPRO~1/OOP_PH~1/DEPEND~1/GLEW-2~1.0/lib/Release/x64

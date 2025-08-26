@@ -9,6 +9,7 @@ add_compile_definitions(GLEW_STATIC)
 add_executable(OOP_Phase2_complete
         # Your main project file
         ProjectMainFile.cpp
+        save_load.cpp
 
         # Dear ImGui source files
         dependencies/imgui-master/imgui.cpp
@@ -27,6 +28,8 @@ add_executable(OOP_Phase2_complete
         dependencies/implot-master/implot.cpp
         dependencies/implot-master/implot_items.cpp
         save_load.h
+        recent_files.h
+        save_load.cpp
 )
 
 target_include_directories(OOP_Phase2_complete PRIVATE
