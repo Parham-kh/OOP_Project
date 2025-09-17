@@ -1,4 +1,39 @@
-"C:\Program Files\JetBrains\CLion 2024.2.1\bin\cmake\win\x64\bin\cmake.exe" -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_MAKE_PROGRAM=C:/Program Files/JetBrains/CLion 2024.2.1/bin/ninja/win/x64/ninja.exe" -G Ninja -S "C:\Users\lenovo\Desktop\oop projects\OOP_Phase2 complete" -B "C:\Users\lenovo\Desktop\oop projects\OOP_Phase2 complete\cmake-build-debug"
--- Configuring done (0.4s)
+"E:\New folder\CLion 2024.2.1\bin\cmake\win\x64\bin\cmake.exe" -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_MAKE_PROGRAM=E:/New folder/CLion 2024.2.1/bin/ninja/win/x64/ninja.exe" -G Ninja -S C:\Users\Asus\CLionProjects\OOP_Project_Phase2 -B C:\Users\Asus\CLionProjects\OOP_Project_Phase2\cmake-build-debug
+-- The C compiler identification is GNU 5.1.0
+-- The CXX compiler identification is GNU 5.1.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Users/Asus/CLionProjects/MinGW/MinGW/bin/gcc.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Users/Asus/CLionProjects/MinGW/MinGW/bin/c++.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (9.1s)
+CMake Error in CMakeLists.txt:
+  Target "OOP_Phase2_complete" requires the language dialect "CXX20" (with
+  compiler extensions).  But the current compiler "GNU" does not support
+  this, or CMake does not know the flags to enable it.
+
+
 -- Generating done (0.0s)
--- Build files have been written to: C:/Users/lenovo/Desktop/oop projects/OOP_Phase2 complete/cmake-build-debug
+CMake Error:
+  Running
+
+   'E:/New folder/CLion 2024.2.1/bin/ninja/win/x64/ninja.exe' '-C' 'C:/Users/Asus/CLionProjects/OOP_Project_Phase2/cmake-build-debug' '-t' 'recompact'
+
+  failed with:
+
+   ninja: error: build.ninja:35: loading 'CMakeFiles/rules.ninja': The system cannot find the file specified.
+
+  
+
+  include CMakeFiles/rules.ninja
+
+                                ^ near here
+
+
+
+CMake Generate step failed.  Build files cannot be regenerated correctly.
